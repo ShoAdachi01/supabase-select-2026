@@ -7,15 +7,17 @@ COPY src ./src
 COPY public ./public
 RUN npm run build
 
-FROM python:3.12-slim
-ENV PYTHONUNBUFFERED=1 TRACE_DATA_DIR=/data PORT=8000
+FROM python:3.12-slim-bookworm
+ENV PYTHONUNBUFFERED=1 TRACE_DATA_DIR=/data CUTROOM_DATA_DIR=/data/cutroom PLAYWRIGHT_BROWSERS_PATH=/opt/browsers PORT=8000
 WORKDIR /app
 COPY requirements.lock ./
-RUN pip install --no-cache-dir -r requirements.lock && useradd --create-home trace && mkdir /data && chown trace /data
+COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
+COPY --from=frontend /app/node_modules ./node_modules
+RUN pip install --no-cache-dir -r requirements.lock && node node_modules/playwright/cli.js install --with-deps chromium && useradd --create-home cutroom && mkdir /data && chown cutroom /data
 COPY server ./server
-COPY public/demo ./public/demo
-COPY scripts/serve.py ./scripts/serve.py
+COPY public/sample ./public/sample
+COPY scripts/serve.py scripts/video_browser.mjs scripts/video_network.mjs ./scripts/
 COPY --from=frontend /app/dist ./dist
-USER trace
+USER cutroom
 EXPOSE 8000
 CMD ["python", "scripts/serve.py"]

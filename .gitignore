@@ -8,14 +8,17 @@ __pycache__/
 !.env.example
 .forge/
 .trace/
+.cutroom/
 .archives/
 .DS_Store
 test-results/
 playwright-report/
 AGENTS.md
 INSTRUCTIONS.md
+instructions.md
 CHAT_HISTORY.md
 IDEA*.md
+idea*.md
 supabase/.temp/
 supabase/.branches/
 *.tsbuildinfo

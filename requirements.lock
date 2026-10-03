@@ -34,6 +34,8 @@ idna==3.20
     # via
     #   anyio
     #   httpx
+imageio-ffmpeg==0.6.0
+    # via -r requirements.txt
 iniconfig==2.3.0
     # via pytest
 numpy==2.5.3

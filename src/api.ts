@@ -10,7 +10,7 @@ export function initialize(): Promise<Config> {
     initPromise = (async () => {
       const response = await fetch('/api/config');
       if (!response.ok)
-        throw new Error('The Trace server is unavailable. Start the API server and refresh.');
+        throw new Error('The studio server is unavailable. Start the API server and refresh.');
       config = await response.json();
       if (!config.configured)
         throw new Error(

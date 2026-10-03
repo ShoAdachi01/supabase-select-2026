@@ -4,6 +4,7 @@
 .venv
 .forge
 .trace
+.cutroom
 .archives
 node_modules
 dist
@@ -14,8 +15,10 @@ __pycache__
 .ruff_cache
 AGENTS.md
 INSTRUCTIONS.md
+instructions.md
 CHAT_HISTORY.md
 IDEA*.md
+idea*.md
 supabase/.temp
 supabase/.branches
 *.tsbuildinfo

@@ -7,4 +7,4 @@ from pathlib import Path
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-uvicorn.run("server.app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+uvicorn.run("server.studio:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

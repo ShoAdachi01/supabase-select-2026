@@ -49,6 +49,9 @@ export default function App() {
   const [config, setConfig] = useState<Config>();
   const [data, setData] = useState<Workspace>(empty);
   const [tab, setTab] = useState<Tab>('overview');
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [tab]);
   const [assetId, setAssetId] = useState('');
   const [selected, setSelected] = useState<Finding>();
   const [showAsset, setShowAsset] = useState(false);

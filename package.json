@@ -1,0 +1,35 @@
+{
+  "name": "forge-prediction-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "server": ".venv/bin/uvicorn server.app:app --host 127.0.0.1 --port 8000",
+    "test": ".venv/bin/pytest -q",
+    "test:e2e": "playwright test",
+    "test:stack": ".venv/bin/python scripts/verify_stack.py",
+    "test:mcp": "node scripts/verify_mcp.mjs",
+    "lint": ".venv/bin/ruff check server scripts tests && prettier --check src tests/browser scripts/verify_mcp.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json",
+    "format": ".venv/bin/ruff format server scripts tests && prettier --write src tests/browser scripts/verify_mcp.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.95.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "prettier": "^3.9.9",
+    "typescript": "~5.8.3",
+    "vite": "^6.1.0"
+  }
+}

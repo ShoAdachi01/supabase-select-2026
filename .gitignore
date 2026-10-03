@@ -13,6 +13,8 @@ playwright-report/
 AGENTS.md
 INSTRUCTIONS.md
 CHAT_HISTORY.md
+IDEA*.md
 supabase/.temp/
 supabase/.branches/
-
+*.tsbuildinfo
+.ruff_cache/

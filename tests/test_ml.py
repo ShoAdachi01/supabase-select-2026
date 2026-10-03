@@ -69,9 +69,13 @@ def test_final_holdout_does_not_change_selected_method():
         poisoned, "target", ["x"], "regression", lambda *_: None, "temporal", "date"
     )
     assert result1["selected_model"] == result2["selected_model"]
-    assert result1["leaderboard"] == result2["leaderboard"] or [
-        x["score"] for x in result1["leaderboard"]
-    ] == [x["score"] for x in result2["leaderboard"]]
+    assert [x["name"] for x in result1["leaderboard"]] == [
+        x["name"] for x in result2["leaderboard"]
+    ]
+    # Parallel tree reductions can differ by machine-precision rounding.
+    assert [x["score"] for x in result1["leaderboard"]] == pytest.approx(
+        [x["score"] for x in result2["leaderboard"]], rel=1e-12, abs=1e-12
+    )
     assert model1.predict(pd.DataFrame({"x": [1.0]}))[0] == pytest.approx(
         model2.predict(pd.DataFrame({"x": [1.0]}))[0]
     )

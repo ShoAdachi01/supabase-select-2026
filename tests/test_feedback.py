@@ -1,6 +1,7 @@
+import asyncio
 import uuid
 
-from fastapi.testclient import TestClient
+import httpx
 
 import server.store as persistence
 from server.app import app, workspace
@@ -18,9 +19,15 @@ def test_feedback_export_reads_all_pages_and_excludes_other_runs(monkeypatch, tm
     for _ in range(100):
         store.save("predictions", {"id": str(uuid.uuid4()), "run_id": "other-run", "actual": 999})
     app.dependency_overrides[workspace] = lambda: store
+
+    async def request():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.get(f"/api/runs/{run_id}/feedback")
+
     try:
-        with TestClient(app) as client:
-            response = client.get(f"/api/runs/{run_id}/feedback")
+        response = asyncio.run(request())
         assert response.status_code == 200
         result = response.json()
         assert result["count"] == 105

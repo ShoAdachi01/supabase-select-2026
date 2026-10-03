@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 
 load_dotenv()
-DATA_DIR = Path(os.getenv("FORGE_DATA_DIR", ".forge")).resolve()
+DATA_DIR = Path(os.getenv("TRACE_DATA_DIR", ".trace")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "")
@@ -48,7 +48,7 @@ class Store:
     def _connection(self):
         connection = sqlite3.connect(DATA_DIR / "offline.sqlite")
         connection.execute(
-            "create table if not exists records (id text primary key, kind text, user_id text, body text)"
+            "create table if not exists records (id text, kind text, user_id text, body text, primary key (id, kind, user_id))"
         )
         return connection
 
@@ -112,15 +112,15 @@ class Store:
         if not LOCAL_DEMO:
             self.request(
                 "POST",
-                f"/storage/v1/object/forge/{self.user_id}/{path}",
+                f"/storage/v1/object/trace/{self.user_id}/{path}",
                 content=data,
                 headers={"Content-Type": content_type, "x-upsert": "true"},
             )
 
     def download(self, path: str) -> bytes:
         if LOCAL_DEMO:
-            raise HTTPException(404, "Local artifact is missing. Upload the dataset again.")
-        return self.request("GET", f"/storage/v1/object/forge/{self.user_id}/{path}").content
+            raise HTTPException(404, "Local evidence is missing.")
+        return self.request("GET", f"/storage/v1/object/trace/{self.user_id}/{path}").content
 
 
 def authenticate(token: str) -> Store:

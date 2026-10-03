@@ -3,6 +3,8 @@
 .env.*
 .venv
 .forge
+.trace
+.archives
 node_modules
 dist
 test-results

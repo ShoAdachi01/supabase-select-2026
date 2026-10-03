@@ -10,7 +10,7 @@ export function initialize(): Promise<Config> {
     initPromise = (async () => {
       const response = await fetch('/api/config');
       if (!response.ok)
-        throw new Error('The Forge server is unavailable. Start the API server and refresh.');
+        throw new Error('The Trace server is unavailable. Start the API server and refresh.');
       config = await response.json();
       if (!config.configured)
         throw new Error(
@@ -65,15 +65,15 @@ export async function api<T>(path: string, body?: unknown, form?: FormData): Pro
   return data;
 }
 
-export async function downloadDataset(id: string) {
-  const response = await fetch(`/api/datasets/${id}/download`, {
+export async function downloadEvidence(id: string) {
+  const response = await fetch(`/api/findings/${id}/export`, {
     headers: { Authorization: `Bearer ${await accessToken()}` },
   });
-  if (!response.ok) throw new Error('Unable to download the dataset.');
+  if (!response.ok) throw new Error('Unable to download the evidence bundle.');
   const url = URL.createObjectURL(await response.blob());
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = 'forge-dataset.csv';
+  anchor.download = `trace-evidence-${id}.zip`;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

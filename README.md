@@ -1,99 +1,89 @@
-# Forge
+# Trace
 
-**Give your agent a tested prediction skill from a CSV.**
+**Find online appearances of character artwork, review permission context, and prepare evidence.**
 
-Agents can reason about a business question, but numerical prediction often needs a model trained on the relevant data. Forge turns labeled tabular data into a reusable tool: inspect the data, confirm the task, compare three methods, evaluate the winner on an untouched test set, and call it through REST or MCP.
+Trace gives owners and their agents a connected workflow: reference images → scoped search → visual comparison → owner review → licensing records and evidence handoff.
 
-Built for Supabase Select 2026. Training and prediction work without an LLM API key.
-
-![Forge prediction playground](docs/screenshots/prediction.png)
-
-## What works
-
-- CSV upload and three sample datasets: simulated shipment delays, simulated building energy demand, and the public UCI wine dataset bundled with scikit-learn.
-- Classification and regression, missing-value handling, categorical encoding, and warnings for identifiers, high-cardinality text, and likely post-outcome fields.
-- A 60/20/20 train/validation/test split, with either stratified random classification splits or chronological evaluation. Preprocessing fits on training data only; model selection uses validation data.
-- Comparison against a simple baseline. Classification reports balanced accuracy; regression reports mean absolute error. The baseline can win.
-- Live experiment traces, validation permutation importance, input checks, model predictions, and saved actual outcomes.
-- Authenticated REST and stateless Streamable HTTP MCP tools. Predictions execute scikit-learn models; they make no language-model call.
+![Trace discovery workspace](docs/screenshots/discovery.png)
 
 ## Run locally
 
-Requirements: Node.js 20.19+ or 22.12+, Python 3.12, Docker, and the [Supabase CLI](https://supabase.com/docs/guides/local-development).
+Requires Node 20+, Python 3.12+, Docker, and the Supabase CLI.
 
 ```sh
 npm ci
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.lock
 supabase start -x vector,imgproxy,edge-runtime,logflare
+supabase migration up --local
 python3 scripts/local_env.py
+npm run server
 ```
 
-The checked-in migration is applied on first start. The configuration enables anonymous Auth. The environment script writes local public connection settings to an ignored `.env` without printing credentials.
-
-In two terminals:
+In another terminal:
 
 ```sh
-npm run server
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. Supabase Studio is at http://127.0.0.1:54323. Follow [the two-minute demo](docs/DEMO.md).
+Open **http://127.0.0.1:5173**. Enable anonymous sign-ins if using a hosted Supabase project. The workspace persists in the browser's Supabase session; clearing that session loses access to its anonymous account. For deployment, add permanent accounts and account recovery.
 
-Optional: add `ANTHROPIC_API_KEY` to `.env` and restart the server for natural-language task planning. Without it, the interface explicitly uses schema-guided suggestions. You always confirm the target and features. With it, column profiles and the objective are sent to Anthropic; training and prediction remain local.
+For an explicit shared offline workspace, set `LOCAL_DEMO_MODE=true` in `.env`; this uses local SQLite and files instead of Supabase. It is not a multi-user deployment mode.
 
-## Supabase integration
+## What works
 
-Supabase provides anonymous Auth, Postgres records, private Storage for CSVs and generated artifacts, and Realtime experiment updates. Every request uses the caller's JWT and the public project key. Row-level policies restrict both records and storage paths to their owner; relationship policies reject runs referencing another user's dataset. No service-role key is needed.
+- Register up to five uploaded or publicly accessible reference images, character names, and visual context.
+- Search real Wikimedia Commons and Openverse collections without credentials; inspect supplied public image or HTML-page URLs.
+- Compare normalized pixels and perceptual fingerprints across reference images and bounded candidate crops. View evidence side by side; fingerprint distance is not a calibrated probability.
+- Group identical candidate images within a search and prioritize review using visible matching, commercial signals, owner decisions, and permission records.
+- Record licensing inquiries. Only an explicit owner approval creates a permission record; checks require the exact domain, category, territory, and current date. Unknown scope stays unresolved.
+- Retain owner review history. A subsequent scan reuses match or rejection feedback for identical decoded image pixels belonging to the same character. Authorization never transfers merely because an image matches.
+- Export ZIP bundles containing captured PNGs, reference artwork, SHA-256 digests, review history, source details, and questions for the owner or counsel. Supplied HTML-page inspections also retain the fetched HTML.
+- Expose seven authenticated tools through Streamable HTTP MCP at `/mcp`.
 
-Your browser retains its anonymous workspace session. Clearing browser storage loses access to that workspace. This demo does not support account recovery.
+## Search providers
 
-## Connect an agent
+| Provider | Configuration | Coverage and behavior |
+| --- | --- | --- |
+| Public collections | None | Text searches Commons and Openverse; verifies returned images. Not broad marketplace monitoring. |
+| Supplied URLs | None | Inspects individual public pages/images. Uses a page's social-preview image or first image; no browser execution. |
+| Google Web Detection | `GOOGLE_VISION_API_KEY` | Sends the first reference image to Google's reverse-image index. Enable Cloud Vision and billing. |
+| Google Lens / SerpAPI | `SERPAPI_API_KEY` | Requires a publicly accessible reference-image URL; sends that URL to SerpAPI. |
+| Optional Gemini comparison | `GEMINI_API_KEY`, optionally `GEMINI_MODEL` | Enabled explicitly per scan; sends reference/candidate images for a character comparison, separate from copy detection. |
 
-Train a skill, then open **Connect your agent → Agent connection**. Copy the MCP configuration and workspace token into a client supporting HTTP transports with custom authorization headers. The endpoint is `/mcp`; `tools/list` discovers your trained skills and `tools/call` executes them. This demo uses bearer tokens, not an OAuth connector flow; tokens expire and should be kept private.
+Restart the API after changing `.env`. Keys remain on the server. Google, SerpAPI, and Gemini adapters have mocked contract tests; live validation requires configured credentials. Source availability, quotas, access policies, and provider charges apply. See [Google Web Detection](https://docs.cloud.google.com/vision/docs/detecting-web), [SerpAPI Lens](https://serpapi.com/google-lens-api), and [Gemini image understanding](https://ai.google.dev/gemini-api/docs/image-understanding).
 
-The REST tab provides a generated curl example and JSON tool schema. `GET /api/runs/{id}/feedback` exports saved prediction/outcome pairs for review. Feedback does **not** automatically retrain or update a model.
+## Agent interface
 
-## Verify
+Open **Agent tools** to inspect live schemas and copy the endpoint and current workspace token. Authenticate requests with `Authorization: Bearer <session-token>`.
 
-Start the API, frontend, and Supabase before integration checks:
+Tools: `list_characters`, `find_character_usage`, `get_scan`, `list_usage_findings`, `submit_license_request`, `record_usage_review`, and `prepare_evidence`.
 
-```sh
-npm run build
-npm test
-npm run lint
-npx playwright install chromium
-npm run test:e2e
-npm run test:stack
-npm run test:mcp
-```
+Tool responses contain concise metadata and authenticated image download paths rather than embedded base64 thumbnails. Search returns a scan ID; poll `get_scan` until complete or failed. `prepare_evidence` returns an authenticated download path. Reviews must reflect an owner-supplied decision. Session tokens expire; this prototype does not implement a public MCP OAuth connector.
 
-Unit tests check input validation and final-holdout independence. Browser tests cover training, inference, feedback, persistence, upload, and mobile layout. Integration checks exercise real Supabase Auth/Storage/RLS, cross-user isolation, and the official MCP client. Integration tests create disposable anonymous workspaces.
+## Structure and validation
 
-## Structure
-
-| Path | Responsibility |
-| --- | --- |
-| `src/` | React interface, typed API client, and styles |
-| `server/app.py` | FastAPI endpoints, background experiments, and MCP |
-| `server/ml.py` | Profiling, sample data, training, evaluation, and inference |
-| `server/store.py` | Auth and user-scoped Supabase persistence |
-| `supabase/migrations/` | Tables, RLS, private bucket, and Realtime publication |
-| `tests/`, `scripts/` | Unit/browser tests and integration checks |
-
-## Deploy
-
-For a hosted Supabase project, apply `supabase/migrations/20261003204500_forge.sql` in its SQL editor, enable anonymous sign-ins in Auth, and set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `LOCAL_DEMO_MODE=false` in the API environment. Enable appropriate anonymous signup protections before sharing broadly.
+`src/` contains the React/TypeScript interface. `server/` separates API, discovery adapters, copy matching, guarded network fetching, workflow services, and persistence. `supabase/migrations/` defines Postgres tables, Realtime, private Storage, and row-level isolation. `public/demo/` contains original SVG artwork and rendered PNG fixtures. `tests/` contains deterministic workflow/security tests and browser tests.
 
 ```sh
-docker build -t forge .
-docker run --rm -p 8000:8000 --env-file .env -v forge-models:/data forge
+npm run build       # Type-check and bundle the interface
+npm run lint        # Ruff and Prettier checks
+npm test            # Deterministic workflow, matching, and security tests
+npm run test:e2e    # Desktop/mobile browser workflows; API + Vite must be running
+npm run test:stack  # Real Supabase Auth, Storage, RLS, approvals, and export
+npm run test:mcp    # Official MCP SDK handshake and workflow execution
 ```
 
-Use a hosted Supabase URL when running this container; `127.0.0.1` inside Docker does not address the host's local stack. The image serves the built frontend and API together; `PORT` controls its listening port. Keep a persistent `/data` volume and a single API worker. Models execute from locally generated artifacts and are never deserialized from uploaded files or restored from remotely writable Storage. Losing the volume requires retraining. For a non-container production preview, run `npm run build` followed by `.venv/bin/python scripts/serve.py`.
+## Deployment
 
-## Scope and limitations
+`npm run build` followed by `.venv/bin/python scripts/serve.py` serves the built interface and API together on `PORT` (default 8000). Alternatively, `docker build -t trace .` builds a production image. Supply `.env` using `--env-file`; do not bake credentials into the image. Apply migrations to the chosen Supabase project and enable anonymous Auth for this prototype.
 
-Use non-sensitive labeled datasets: 50–25,000 rows, 2–50 columns, CSVs up to 5 MB. Classification supports 2–20 classes with at least five examples per class. Two concurrent experiments are allowed per worker; training jobs are in-process and do not survive worker restarts. `LOCAL_DEMO_MODE=true` is an explicit, shared offline fallback; it is not a multi-user deployment.
+Run one API worker: searches use in-process background tasks with two concurrent scans, four image-fetch workers per scan, and a maximum of 24 candidates. Interrupted searches are marked failed on the next workspace read and can be retried. A production service needs durable job processing, rate limits, permanent accounts, and operational controls for provider spending. The built-in offline mode also needs a persistent `/data` volume.
 
-Field-name heuristics cannot discover every kind of leakage. Confirm that inputs are available before the outcome; use chronological evaluation for time-dependent tasks. Probabilities are not independently calibrated, permutation importance is not causal, and synthetic sample performance is not evidence of production quality. Forge does not yet provide automatic retraining, model monitoring, pretrained-model discovery, or billing.
+## Boundaries
+
+A matching image establishes an appearance, not infringement. Missing permission records do not prove unauthorized use. No exhaustive internet coverage, real-person face identification, automatic legal notices, monetary-loss estimates, or lawsuits are implemented. Perceptual fingerprints find copies and some transformations; they do not reliably recognize new poses, figurines, costumes, or redrawings. Optional model assessments still require owner review.
+
+Public example imagery is used for discovery testing, not as a claim of ownership. Orbit and all its `.example` listings and permission records are fictional and explicitly labeled. Feedback reuse demonstrates exact-image memory, not generalization to unseen artwork or a cross-customer learning network.
+
+The prior Forge project is preserved at `archive/forge-v1`; see [archive instructions](archive/README.md).

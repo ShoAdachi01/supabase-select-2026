@@ -1,33 +1,36 @@
-# Forge: submission and demo
+# Trace: submission and demo
 
-## One-line pitch
+## Pitch
 
-Forge turns a CSV into a tested prediction tool that an agent can call instead of guessing a number with language-model tokens.
+Trace gives an agent the ability to find online appearances of character artwork and return a permission-aware, reviewable trail of evidence.
 
-## The problem
+## The job
 
-An operations assistant may know how to explain delivery risk but lack a validated way to predict it from the company's own data. Connecting data, preparing inputs, evaluating a model, and exposing it as an authenticated tool currently require several separate steps. Forge makes that workflow visible and repeatable.
+A character-IP owner needs to locate relevant appearances, distinguish known permissions from unresolved usage, and prepare the next action without repeatedly reconstructing the context. Discovery alone produces links; Trace connects links to reference artwork, owner decisions, and scoped permission records.
 
-## Two-minute demo
+## Three-minute demonstration
 
-1. Open the skill library and select **Will this shipment be late?** Explain that this is simulated operational data, explicitly labeled in the interface.
-2. Show the chosen target and inputs. Point out the excluded `actual_delivery_days` field: it is unavailable before delivery and could leak the outcome. Missing warehouse values are imputed using training rows only.
-3. Click **Train & evaluate**. Show the saved experiment trace and the baseline, logistic regression, and random forest comparison. Selection uses validation data; the final metric uses a separate test set.
-4. Click **Use this skill**, change the warehouse load or weather, and run an actual prediction. Show the model result, inference time, and zero language-model tokens for this prediction.
-5. Save a known actual outcome. Explain that it is stored for review and does not silently change the model.
-6. Open **Agent connection**, test discovery, and show the generated MCP configuration. Run `npm run test:mcp` in a terminal to demonstrate an official MCP client discovering and executing a trained tool on the public wine dataset.
-7. Return to the library and refresh: the authenticated workspace, dataset, and experiment remain persisted in Supabase.
+1. Open **Overview** and click **Explore the Orbit demo**. State explicitly that Orbit is original demo artwork and all six listings are fictional. This demonstrates the connected workflow, not live marketplace coverage.
+2. In **Discovery**, show the reference, source coverage, and six candidate appearances grouped into five distinct images. A shirt appears twice; the official print has a scoped permission record. A different blue rabbit remains unverified.
+3. Open the shirt. Compare its image against the reference, inspect the fingerprint evidence, and explain why priority reflects review urgency rather than estimated financial loss.
+4. Open the blue rabbit, record **Not a match**, and run discovery again. The identical-image correction is reused; the rabbit no longer needs the same identity review. This proves exact-image memory, not recognition of unseen drawings.
+5. In **Licensing**, record a Moon Market request for `moon-market.example`, category `apparel`, territory `US`, and a date range including today. The pending request creates no permission. Click **Record approval** to record an owner-supplied approval.
+6. Return to **Discovery**. The matching shirt scope now has a permission record. Other categories, territories, domains, and unknown context remain unresolved.
+7. Export the shirt's evidence ZIP. Show `case.json`, `candidate.png`, reference artwork, the capture digest, review history, and `REVIEW.md`.
+8. Open **Agent tools** and inspect live schemas. `npm run test:mcp` demonstrates an official SDK client starting discovery, recording an owner-directed review, and downloading evidence.
 
-If time allows, upload a CSV or try the energy regression sample to show that the workflow supports more than one hardcoded target.
+## Live discovery
+
+Click **Try a live public example** on Overview, then search **Public collections**. This searches actual Wikimedia Commons and Openverse results and fetches candidate images. It does not demonstrate broad commercial marketplace coverage. Fetch failures are retained as unverified candidates.
+
+For broader reverse-image discovery, configure Google Vision or SerpAPI. Those integrations require working provider credentials. Uploaded private references work with Google; Lens requires a public image URL. Optional Gemini review compares different depictions but is separate from copy matching.
 
 ## Technical substance
 
-Supabase Auth creates the workspace; Postgres saves datasets, runs, and predictions; private Storage keeps artifacts; Realtime updates experiments; RLS isolates users. A Python worker fits real scikit-learn pipelines. REST and MCP expose the selected model with a generated input schema.
+Supabase Auth owns the workspace; Postgres retains characters, scans, findings, inquiries, grants, and review history; private Storage contains artwork and captures; Realtime publishes search changes; RLS and composite ownership foreign keys isolate users. Fetching validates public addresses and pins connections to those addresses, rechecking every redirect. REST and MCP use the same authenticated workflow services.
 
-## Honest boundaries
+## Claim the prototype can prove
 
-This is a working tabular prediction workflow. It does not invent a new AutoML algorithm or implement a universal model marketplace. There is no automatic feedback-driven retraining or payment system yet. Optional language-model planning requires a configured key; the default demo labels its schema-guided setup accurately.
+An owner can move from references to a documented review decision, and identical-image feedback can prevent repeating an identity review. Browser tests verify discovery, feedback reuse, approval scope, evidence downloads, persistence, and mobile layout. Live stack tests check private Storage and cross-workspace access.
 
-## Inspiration
-
-Our qualitative reading of recent Hack the North projects favored concrete execution with visible checks: [CADEX](https://devpost.com/software/cadex) generates CAD with geometry checks, [Reflex](https://devpost.com/software/reflex-e0jkih) connects agent commands to a physical glove, and [Signal](https://devpost.com/software/temp-project-0sp3zv) presents evidence-backed research. Forge applies that idea to measurable predictions: show the inputs, compare methods, then expose an executable capability. This is an interpretation of those examples, not a statistical survey of submissions.
+It cannot establish customer willingness to pay, litigation recovery, exhaustive coverage, or recognition accuracy across unseen character depictions. Those require real user workflows and independent evaluation.

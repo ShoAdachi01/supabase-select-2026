@@ -1,88 +1,93 @@
-export type Column = {
-  name: string;
-  type: 'number' | 'category';
-  unique: number;
-  missing: number;
-  excluded: boolean;
-  reason: string | null;
-  examples: (string | number)[];
-  min: number | null;
-  max: number | null;
-};
-export type Dataset = {
+export type Reference = { path: string; thumbnail: string; public_url: string; sha256: string };
+export type Character = {
   id: string;
   name: string;
-  source: string;
   created_at: string;
-  profile: {
-    rows: number;
-    columns: Column[];
-    preview: Record<string, string | number | null>[];
-    issues: { column: string; severity: string; message: string }[];
-    missing_cells: number;
-    duplicates: number;
-    suggested_target: string;
-    suggested_task: 'classification' | 'regression';
-  };
+  payload: { description: string; aliases: string[]; references: Reference[]; demo: boolean };
 };
-export type Plan = {
-  target: string;
-  task: 'classification' | 'regression';
-  features: string[];
-  name: string;
-  reason: string;
-  provider: string;
-};
-export type ModelResult = {
-  selected_model: string;
-  task: 'classification' | 'regression';
-  metric: string;
-  higher_better: boolean;
-  test_score: number;
-  baseline_score: number;
-  leaderboard: { name: string; score: number; seconds: number; baseline: boolean }[];
-  splits: { train: number; validation: number; test: number; strategy: string };
-  training_seconds: number;
-  importance: { feature: string; value: number }[];
-  input_schema: Column[];
-  example_input: Record<string, string | number | null>;
-  baseline_only: boolean;
-  target: string;
-  features: string[];
-  test_examples: { actual: string | number; predicted: string | number }[];
-  labels: string[];
-  confusion_matrix: number[][];
-  metrics: Record<string, number>;
-  notes: string[];
-};
-export type Run = {
+export type Coverage = { source: string; status: string; query: string; detail: string };
+export type Scan = {
   id: string;
-  name: string;
-  dataset_id: string;
-  status: 'queued' | 'training' | 'ready' | 'failed';
+  asset_id: string;
+  status: 'queued' | 'searching' | 'complete' | 'failed';
   created_at: string;
   payload: {
-    objective: string;
-    target: string;
-    features: string[];
-    task: string;
-    events: { title: string; detail: string; at: string }[];
-    result?: ModelResult;
+    request: { source: string; query: string };
+    coverage: Coverage[];
+    events: { at: string; message: string }[];
+    finding_count: number;
+    reused_corrections?: number;
     error?: string;
   };
 };
-export type Prediction = {
-  predictions: { value: string | number; probabilities: Record<string, number> | null }[];
-  inference_ms: number;
-  model: string;
-  warnings: string[];
-  tokens_used_for_prediction: number;
-  prediction_id: string;
+export type Decision =
+  'unreviewed' | 'confirmed_match' | 'authorized' | 'not_a_match' | 'investigate';
+export type Finding = {
+  id: string;
+  asset_id: string;
+  scan_id: string;
+  created_at: string;
+  payload: {
+    title: string;
+    url: string;
+    image_url?: string;
+    domain: string;
+    thumbnail?: string;
+    provider: string;
+    demo: boolean;
+    category: string;
+    territory: string;
+    match: {
+      kind: string;
+      reason: string;
+      method: string;
+      distance?: number;
+      reference_index?: number;
+    };
+    permission: { status: string; reason: string };
+    priority: string;
+    priority_reason: string;
+    commercial_signal?: boolean;
+    image_sha256?: string;
+    capture_sha256?: string;
+    captured_at: string;
+    evidence_path?: string;
+    review: { decision: Decision; note: string; at?: string };
+    reused_correction?: boolean;
+    semantic_review?: { kind: string; reason: string; provider: string };
+    semantic_review_error?: string;
+  };
+};
+export type License = {
+  id: string;
+  asset_id: string;
+  status: string;
+  created_at: string;
+  payload: {
+    applicant: string;
+    email: string;
+    domain: string;
+    category: string;
+    territory: string;
+    starts_on: string;
+    ends_on: string;
+    description: string;
+    decision_note?: string;
+  };
+};
+export type Grant = { id: string; asset_id: string; payload: License['payload'] };
+export type Workspace = {
+  assets: Character[];
+  scans: Scan[];
+  findings: Finding[];
+  licenses: License[];
+  grants: Grant[];
+  reviews: { id: string }[];
 };
 export type Config = {
   supabase_url: string;
   supabase_key: string;
   mode: string;
-  planner: string;
   configured: boolean;
+  providers: { public: boolean; google: boolean; serpapi: boolean; gemini: boolean };
 };

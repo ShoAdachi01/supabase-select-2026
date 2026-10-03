@@ -1,6 +1,6 @@
 {
-  "name": "forge-prediction-tools",
-  "version": "0.1.0",
+  "name": "trace-character-discovery",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {

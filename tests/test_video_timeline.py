@@ -94,6 +94,17 @@ def test_launch_plan_contains_real_captures_between_three_editable_cards():
     assert len(compile_timeline(source, [TimelineClip.model_validate(c) for c in draft])) == 5
 
 
+def test_launch_camera_only_targets_verified_detail_regions():
+    scenes = job()["payload"]["scenes"]
+    for scene in scenes:
+        scene["shot"] = "result"
+    scenes[1]["details"] = ["detail-1-0.png"]
+    clips = [c for c in launch_clips(scenes, "Product") if c["kind"] == "browser"]
+    assert clips[0]["motion"] == "none"
+    assert clips[0]["camera"] == "wide"
+    assert clips[1]["motion"] == "detail"
+
+
 def test_veo_uses_bounded_duration_and_actionable_quota_error(monkeypatch):
     monkeypatch.setattr(
         video_generation,

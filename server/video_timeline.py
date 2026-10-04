@@ -52,8 +52,9 @@ def launch_clips(
     # Keep source clips recoverable, but do not repeat an establishing screen before the feature.
     for clip, source in zip(originals, scenes, strict=True):
         clip["enabled"] = not (len(scenes) > 1 and source.get("action") == "overview")
-        clip["camera"] = "push" if source.get("shot") == "result" else "wide"
-        clip["motion"] = "detail" if source.get("shot") == "result" else "none"
+        has_detail = source.get("shot") == "result" and bool(source.get("details"))
+        clip["camera"] = "wide"
+        clip["motion"] = "detail" if has_detail else "none"
     scripts = plan.get("narration", [])
     if isinstance(scripts, list) and len(scripts) == len(originals):
         for clip, script in zip(originals, scripts, strict=True):

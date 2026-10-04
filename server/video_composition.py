@@ -105,15 +105,9 @@ def prepare_compositions(
             with Image.open(folder / name) as im:
                 im.convert("RGB").save(target)
             details.append(target.name)
-        if not details:
-            # Crop actual pixels for old recordings that predate element-level capture.
-            with Image.open(product) as im:
-                for j, box in enumerate(
-                    ((390, 210, 1380, 750), (810, 190, 1890, 820), (300, 490, 1380, 1060))
-                ):
-                    target = folder / f"motion-detail-{i}-{j}.png"
-                    im.crop(box).save(target)
-                    details.append(target.name)
+        if preset == "panels" and len(details) < 2:
+            # Unverified crops often magnify blank space. Reveal the complete real screen instead.
+            preset = "reveal"
         footage = None
         if preset == "detail":
             footage = folder / f"motion-footage-{i}.mp4"

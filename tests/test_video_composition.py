@@ -9,6 +9,7 @@ from PIL import Image
 from pydantic import ValidationError
 
 from server import video_composition
+from server.video_alignment import align_result_shots
 from server.video_models import TimelineClip
 from server.video_render import ffmpeg, original_music, transition_cues
 
@@ -85,6 +86,39 @@ def test_only_reviewed_motion_presets_are_accepted():
     with pytest.raises(ValidationError):
         TimelineClip(id="x", motion="execute-javascript")
     assert TimelineClip(id="x").motion == "none"  # Old projects retain their original rendering.
+
+
+def test_result_alignment_finds_screen_despite_wrong_browser_clock(tmp_path, capture):
+    Image.new("RGB", (320, 180), "blue").save(tmp_path / "scene-0.jpg")
+    scenes = [{"shot": "result", "thumbnail": "scene-0.jpg", "start": 0, "end": 0.8}]
+    align_result_shots(capture, tmp_path, scenes)
+    assert scenes[0]["start"] >= 1
+    assert scenes[0]["end"] <= 2
+    assert scenes[0]["capture_start"] == 0
+
+
+def test_result_alignment_rejects_screen_absent_from_recording(tmp_path, capture):
+    Image.new("RGB", (320, 180), "white").save(tmp_path / "scene-0.jpg")
+    with pytest.raises(ValueError, match="could not be verified"):
+        align_result_shots(
+            capture,
+            tmp_path,
+            [{"shot": "result", "thumbnail": "scene-0.jpg", "start": 0, "end": 1}],
+        )
+
+
+def test_panel_treatment_without_regions_uses_complete_screen(tmp_path, capture, monkeypatch):
+    monkeypatch.setattr(video_composition, "run_compositor", lambda *args: None)
+    video_composition.prepare_compositions(
+        tmp_path,
+        capture,
+        [{"motion": "panels", "start": 0, "end": 1, "duration": 1}],
+        "paper",
+        [None],
+    )
+    job = json.loads((tmp_path / "motion-jobs.json").read_text())["jobs"][0]
+    assert job["preset"] == "reveal"
+    assert job["details"] == []
 
 
 def test_sound_cues_are_repeatable_and_do_not_clip(tmp_path):

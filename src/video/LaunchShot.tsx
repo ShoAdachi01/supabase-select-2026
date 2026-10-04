@@ -105,13 +105,19 @@ export function LaunchShot(props: ShotProps) {
     const move = segment(t, 0.04, 0.34);
     const release = segment(t, 0.7, 1);
     const zoom = 1 + 0.62 * move * (1 - release);
+    const travel = move * (1 - release);
+    const offset = (center: number, size: number) =>
+      Math.max(
+        (-(zoom - 1) * size) / 2,
+        Math.min(((zoom - 1) * size) / 2, (0.5 - center) * size * zoom * travel),
+      );
     return (
       <AbsoluteFill style={{ background: bg }}>
         <Product
           props={props}
           style={{
-            transform: `scale(${zoom})`,
-            transformOrigin: `${focus.x * 100}% ${focus.y * 100}%`,
+            transform: `translate(${offset(focus.x, 1920)}px, ${offset(focus.y, 1080)}px) scale(${zoom})`,
+            transformOrigin: '50% 50%',
           }}
         />
         <div
@@ -249,10 +255,7 @@ export function LaunchShot(props: ShotProps) {
                 transform: `translate(${(1 - enter) * 380 + leave * (i - 1) * 650}px, ${(1 - enter) * 180 + leave * 280}px) rotateX(${mix(16, 0, enter)}deg) rotateY(${mix(-14, -3, enter)}deg) rotateZ(${[-5, 3, -3][i]}deg) scale(${mix(0.88, 1, enter)})`,
               }}
             >
-              <Img
-                src={src}
-                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top' }}
-              />
+              <Img src={src} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             </div>
           );
         })}

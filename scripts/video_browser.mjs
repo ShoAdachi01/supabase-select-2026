@@ -182,36 +182,59 @@ try {
     });
     // Keep real, independently composable interface details alongside the recording.
     const regions = await page.evaluate(() => {
+      const root = document.querySelector('main,[role="main"],.main') || document.body;
       const nodes = [
-        ...document.querySelectorAll(
-          'main section,main article,main table,main form,[role="dialog"],[role="tabpanel"],main .card,main .panel',
-        ),
+        ...root.querySelectorAll('section,article,table,form,div,button,[role="tabpanel"]'),
       ];
-      return nodes
-        .map((el) => {
+      const candidates = nodes
+        .flatMap((el) => {
+          if (el.closest('nav,aside,[role="navigation"]')) return [];
+          const style = getComputedStyle(el);
           const r = el.getBoundingClientRect();
           const x = Math.max(0, r.x),
             y = Math.max(0, r.y);
-          return {
-            x,
-            y,
-            width: Math.min(innerWidth, r.right) - x,
-            height: Math.min(innerHeight, r.bottom) - y,
-          };
+          const width = Math.min(innerWidth, r.right) - x;
+          const height = Math.min(innerHeight, r.bottom) - y;
+          const text = el.textContent.trim();
+          const framed =
+            parseFloat(style.borderRadius) >= 6 ||
+            parseFloat(style.borderTopWidth) > 0 ||
+            el.matches('table,form,article,section') ||
+            el.querySelector('svg,canvas');
+          if (
+            !framed ||
+            style.visibility === 'hidden' ||
+            style.display === 'none' ||
+            text.length < 8 ||
+            width < 180 ||
+            height < 90 ||
+            width / height > 5 ||
+            width * height > innerWidth * innerHeight * 0.38
+          )
+            return [];
+          return [{ x, y, width, height }];
         })
-        .filter(
-          (r) =>
-            r.width >= 240 &&
-            r.height >= 120 &&
-            r.width * r.height < innerWidth * innerHeight * 0.72,
-        )
-        .sort((a, b) => b.width * b.height - a.width * a.height)
-        .filter(
-          (r, i, all) =>
-            !all.slice(0, i).some((p) => Math.abs(p.x - r.x) < 20 && Math.abs(p.y - r.y) < 20),
-        )
-        .slice(0, 3);
+        .sort((a, b) => b.width * b.height - a.width * a.height);
+      const selected = [];
+      for (const r of candidates) {
+        const overlaps = selected.some((p) => {
+          const area =
+            Math.max(0, Math.min(p.x + p.width, r.x + r.width) - Math.max(p.x, r.x)) *
+            Math.max(0, Math.min(p.y + p.height, r.y + r.height) - Math.max(p.y, r.y));
+          return area > Math.min(p.width * p.height, r.width * r.height) * 0.35;
+        });
+        if (!overlaps) selected.push(r);
+        if (selected.length === 3) break;
+      }
+      return selected;
     });
+    if (regions.length && (scene.action === 'overview' || scene.shot === 'result')) {
+      const left = Math.min(...regions.map((r) => r.x));
+      const right = Math.max(...regions.map((r) => r.x + r.width));
+      const top = Math.min(...regions.map((r) => r.y));
+      const bottom = Math.max(...regions.map((r) => r.y + r.height));
+      scene.focus = { x: (left + right) / 2, y: (top + bottom) / 2 };
+    }
     scene.details = [];
     for (const [i, clip] of regions.entries()) {
       const name = `detail-${scenes.length}-${i}.png`;

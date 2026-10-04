@@ -26,10 +26,14 @@ def ffmpeg(*args: str, timeout: int = 300):
         raise ValueError("Video rendering failed. " + result.stderr.decode(errors="replace")[-900:])
 
 
-def font(size: int):
+def font(size: int, bold: bool = False):
     for path in (
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
+        if bold
+        else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ):
         if Path(path).exists():
             return ImageFont.truetype(path, size)
@@ -119,6 +123,13 @@ def original_music(path: Path, duration: float, style: str):
             noise = np.random.default_rng(i).standard_normal(len(local))
             hat = noise - np.roll(noise, 1)
             track[mask] += 0.007 * hat * np.exp(-phase * 85)
+            backbeat = (local + 0.4) % 0.8
+            track[mask] += 0.035 * noise * np.exp(-backbeat * 38)
+            track[mask] += (
+                0.045
+                * np.sin(2 * np.pi * chords[i % len(chords)][0] / 2 * kick)
+                * np.exp(-kick * 5)
+            )
     fade = np.minimum(t / 1.2, 1) * np.minimum((duration - t) / 1.8, 1)
     pcm = np.clip(track * fade * 32767, -32767, 32767).astype("<i2")
     with wave.open(str(path), "wb") as out:
@@ -351,7 +362,7 @@ def render(
             "-i",
             str(bed),
             "-filter_complex",
-            "[0:a]asplit=2[voice][side];[1:a]volume=.38[bed];[bed][side]sidechaincompress=threshold=.015:ratio=6:attack=20:release=500[duck];[voice][duck]amix=inputs=2:duration=first:normalize=0[a]",
+            "[0:a]loudnorm=I=-16:TP=-1.5:LRA=9,asplit=2[voice][side];[1:a]loudnorm=I=-21:TP=-2:LRA=7[bed];[bed][side]sidechaincompress=threshold=.06:ratio=2:attack=15:release=250[duck];[voice][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=.95:level=false[a]",
             "-map",
             "0:v",
             "-map",

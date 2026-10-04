@@ -20,7 +20,6 @@ import {
   Mic,
   MoreHorizontal,
   MousePointer2,
-  Music2,
   Play,
   Plus,
   RefreshCw,
@@ -54,11 +53,7 @@ function Logo({ small = false }: { small?: boolean }) {
       <span>
         <Clapperboard size={small ? 16 : 20} strokeWidth={1.7} />
       </span>
-      {!small && (
-        <>
-          cutroom<span className="logo-dot">®</span>
-        </>
-      )}
+      {!small && <>cutroom</>}
     </div>
   );
 }
@@ -177,6 +172,9 @@ export default function Studio() {
   const videoElement = useRef<HTMLVideoElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const job = videos.find((v) => v.id === selected);
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [tab, creating, selected]);
 
   async function refresh() {
     const [items, narrators, config] = await Promise.all([
@@ -483,20 +481,8 @@ export default function Studio() {
           </button>
         </nav>
         <div className="sidebar-note">
-          <div className="orbit-mark">
-            <Sparkles size={19} />
-          </div>
-          <b>
-            A little less recording.
-            <br />A lot more creating.
-          </b>
-          <p>
-            Your agent handles the clicks.
-            <br />
-            You tell the story.
-          </p>
           <button onClick={() => navigate('agents')}>
-            Connect your agent <ArrowRight size={14} />
+            <Code2 size={16} /> Connect your agent <ArrowRight size={14} />
           </button>
         </div>
         <div className="sidebar-bottom">
@@ -565,11 +551,9 @@ export default function Studio() {
           <div className="dashboard">
             <div className="page-heading">
               <div>
-                <div className="eyebrow">THE STUDIO IS YOURS</div>
-                <h1>
-                  My videos<span>.</span>
-                </h1>
-                <p>From a product link to a film worth sharing.</p>
+                <div className="eyebrow">YOUR WORKSPACE</div>
+                <h1>Studio</h1>
+                <p>Everything you need for your next launch.</p>
               </div>
               <button
                 className="button dark"
@@ -583,68 +567,67 @@ export default function Studio() {
                 Create a video
               </button>
             </div>
-            <section className="hero">
-              <div className="hero-copy">
-                <span className="hero-tag">
-                  <span />A NEW WAY TO SHOW WHAT YOU BUILT
-                </span>
-                <h2>
-                  Your product.
-                  <br />
-                  <span>In motion.</span>
-                </h2>
-                <p>
-                  Give your agent a link and a little direction.
-                  <br />
-                  Get a polished demo, with the story, voice,
-                  <br />
-                  and finishing touches already there.
-                </p>
+            <section className="launch-hero">
+              <div className="launch-symbol" aria-hidden="true">
+                <Clapperboard size={28} strokeWidth={1.4} />
+              </div>
+              <h2>
+                You built it.
+                <br />
+                <span>Now let it move.</span>
+              </h2>
+              <p>
+                Turn your product into a video worth sharing.
+                <br />A link, a little direction. Your agent handles the rest.
+              </p>
+              <form
+                className="launch-link"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setCreating(true);
+                }}
+              >
+                <Globe2 size={20} />
+                <input
+                  aria-label="Product link"
+                  type="url"
+                  placeholder="Paste your product link"
+                  value={form.url}
+                  onChange={(event) => setForm({ ...form, url: event.target.value })}
+                />
+                <button aria-label="Start your video" disabled={!ready}>
+                  <ArrowRight size={20} />
+                </button>
+              </form>
+              <div className="launch-shortcuts">
                 <button
-                  className="button coral"
-                  disabled={!ready}
-                  onClick={() => setCreating(true)}
+                  onClick={() => {
+                    setForm({ ...form, format: 'launch' });
+                    setCreating(true);
+                  }}
                 >
-                  Make your first take <ArrowRight size={16} />
+                  <Sparkles size={14} /> Feature launch
                 </button>
                 <button
-                  className="text-button sample-link"
-                  disabled={saving || !ready}
-                  onClick={() => create(true)}
+                  onClick={() => {
+                    setForm({ ...form, format: 'walkthrough' });
+                    setCreating(true);
+                  }}
                 >
-                  {saving ? (
-                    <LoaderCircle size={14} className="spin" />
-                  ) : (
-                    <Play size={12} fill="currentColor" />
-                  )}
-                  Try a real capture of our sample app
+                  <Film size={14} /> Product walkthrough
+                </button>
+                <button onClick={() => navigate('agents')}>
+                  <Code2 size={14} /> Create with your agent
                 </button>
               </div>
-              <div className="hero-visual">
-                <div className="preview-little-label">
-                  <span />
-                  <span>YOUR PRODUCT, CENTER STAGE</span>
-                  <span>16:9</span>
-                </div>
-                <div className="hero-film">
-                  <MiniApp />
-                  <div className="preview-caption">A clearer way to bring your work together.</div>
-                </div>
-                <div className="film-under">
-                  <span>
-                    <WandSparkles size={12} />
-                    Smooth zooms & cuts
-                  </span>
-                  <span>
-                    <Mic size={12} />
-                    Your voice, or ours
-                  </span>
-                  <span>
-                    <Music2 size={12} />
-                    Music included
-                  </span>
-                </div>
-              </div>
+              <button
+                className="text-button sample-link"
+                disabled={saving || !ready}
+                onClick={() => create(true)}
+              >
+                {saving ? <LoaderCircle size={14} className="spin" /> : <Play size={12} />}
+                Try a real capture of our sample app
+              </button>
             </section>
             <div className="library-header">
               <div>

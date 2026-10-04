@@ -92,27 +92,28 @@ function Type({ layer, frame, fps }: { layer: MotionLayer; frame: number; fps: n
         {layer.text.split(/\s+/).map((word, i) => {
           const p = smooth((frame - i * fps * 0.045) / (fps * 0.28));
           return (
-            <span
-              key={i}
-              style={{
-                display: 'inline-block',
-                overflow: 'hidden',
-                verticalAlign: 'top',
-                paddingBottom: '.15em',
-                marginBottom: '-.15em',
-                marginRight: '.22em',
-              }}
-            >
+            <React.Fragment key={i}>
               <span
                 style={{
                   display: 'inline-block',
-                  transform: `translateY(${(1 - p) * 110}%)`,
-                  opacity: p,
+                  overflow: 'hidden',
+                  verticalAlign: 'top',
+                  paddingBottom: '.15em',
+                  marginBottom: '-.15em',
                 }}
               >
-                {word}
+                <span
+                  style={{
+                    display: 'inline-block',
+                    transform: `translateY(${(1 - p) * 110}%)`,
+                    opacity: p,
+                  }}
+                >
+                  {word}
+                </span>
               </span>
-            </span>
+              {i < layer.text.split(/\s+/).length - 1 ? ' ' : null}
+            </React.Fragment>
           );
         })}
       </>
@@ -193,16 +194,34 @@ export function DirectedShot(props: ShotProps) {
         const typeFrame =
           (Math.max(0, frame - (textStart * fps * 60) / direction.bpm) * naturalEntrance) /
           entranceFrames;
+        // Preserve deliberate line breaks. Canvas fitting treats embedded newlines
+        // differently from HTML whitespace, which previously pushed settled text off-canvas.
+        const paragraphs = layer.text
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const maxLines = Math.max(
+          paragraphs.length,
+          Math.min(4, Math.floor((s.h * 1080) / (layer.size * 1.08))),
+        );
+        const layouts = isText
+          ? paragraphs.map((text) =>
+              fitTextOnNLines({
+                text: text.replace(/\s+/g, ' '),
+                fontFamily: 'Inter Variable',
+                fontWeight: layer.weight,
+                letterSpacing: '-.045em',
+                maxBoxWidth: Math.max(1, s.w * 1920 - 8),
+                maxLines: Math.max(1, Math.floor(maxLines / paragraphs.length)),
+                maxFontSize: Math.min(layer.size, (s.h * 1080) / (Math.max(1, maxLines) * 1.08)),
+              }),
+            )
+          : [];
         const textLayout = isText
-          ? fitTextOnNLines({
-              text: layer.text,
-              fontFamily: 'Inter Variable',
-              fontWeight: layer.weight,
-              letterSpacing: '-.045em',
-              maxBoxWidth: Math.max(1, s.w * 1920 - 8),
-              maxLines: Math.max(1, Math.min(4, Math.floor((s.h * 1080) / (layer.size * 1.08)))),
-              maxFontSize: Math.min(layer.size, (s.h * 1080) / 1.08),
-            })
+          ? {
+              fontSize: Math.min(...layouts.map((layout) => layout.fontSize)),
+              lines: layouts.flatMap((layout) => layout.lines),
+            }
           : null;
         return (
           <div key={layer.id} style={style}>

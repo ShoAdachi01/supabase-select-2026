@@ -41,7 +41,7 @@ Alternate visual density and pacing. Use purposeful cuts, spatial matches, masks
 A persistent layer ID represents one object: for entry=match its first geometry MUST exactly equal that ID's last state in the preceding shot. A match cut may swap the captured pixels; do not claim it is a pixel-identical continuous take.
 Use one-container morphing locally where useful, not as a rule for the entire film.
 Render contract: 1920x1080, 30fps, deterministic frame-based motion, one shared BPM (100/120/150/180), local beat coordinates. No CSS, JS, URLs, arbitrary assets, gradients, fabricated UI, or placeholder copy.
-Only real captured product pixels may depict the UI. Text INSIDE a product is not a capability OF that product. Ground every claim in evidence. No invented metrics, outcomes, testimonials, pricing, or brand assets.
+Only real captured product pixels may depict the UI. Text INSIDE a product is not a capability OF that product. The user's feature brief supplies product facts and intended audience; you may express those facts even when this capture shows only part of the workflow. Distinguish supplied facts from observed actions. Never pretend an uncaptured interaction was filmed. Do not infer capabilities from sample project names. No invented metrics, outcomes, testimonials, pricing, or brand assets.
 Keep product interactions unobstructed. Footage layers must remain visible throughout, one per shot. Do not overlay headline text on the clicked control. Every supplied feature capture must appear as footage at least once, in capture order; you may interleave or bookend still/details/type shots.
 Typography: one short thought per shot, at most eight words total. Place type deliberately, with enough width and height; keep it inside the canvas, visible for at least a second. No tiny captions.
 Do not overlay plain text directly on captured pixels. Put it in negative space or over a purpose-designed opaque shape with contrasting ink. Product UI is usually light: white headlines on white screenshots are unreadable. You may use an entire shot for kinetic typography. Do not give every shot a caption.
@@ -119,6 +119,41 @@ def constrain_geometry(plan: FilmDirection) -> FilmDirection:
     return plan
 
 
+def layout_at(layer, beat: float) -> dict:
+    """Sample planned rectangles for layout checks; rendering owns exact spring physics."""
+    for before, after in zip(layer.states, layer.states[1:], strict=False):
+        if before.beat <= beat < after.beat:
+            t = (beat - before.beat) / (after.beat - before.beat)
+            if after.ease == "hold":
+                t = 0
+            elif after.ease == "smooth":
+                t = t * t * (3 - 2 * t)
+            return {
+                key: getattr(before, key) + t * (getattr(after, key) - getattr(before, key))
+                for key in ("x", "y", "w", "h", "opacity")
+            }
+    return layer.states[-1].model_dump()
+
+
+def rects_overlap(a: dict, b: dict) -> bool:
+    return (
+        a["x"] < b["x"] + b["w"]
+        and a["x"] + a["w"] > b["x"]
+        and a["y"] < b["y"] + b["h"]
+        and a["y"] + a["h"] > b["y"]
+    )
+
+
+def covers(backing: dict, text: dict) -> bool:
+    return (
+        backing["opacity"] >= 0.95
+        and backing["x"] <= text["x"]
+        and backing["y"] <= text["y"]
+        and backing["x"] + backing["w"] + 1e-6 >= text["x"] + text["w"]
+        and backing["y"] + backing["h"] + 1e-6 >= text["y"] + text["h"]
+    )
+
+
 def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> list[str]:
     """Concrete quality gates supplement the schema and the visual critic."""
     issues = []
@@ -145,6 +180,12 @@ def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> l
                 (e["time"] - source["start"] + 0.5 for e in source.get("interactions", [])),
                 default=1,
             )
+            # A long clone of the capture's last frame is dead time, not product proof.
+            maximum_proof = max(min(needed, 12), source["end"] - source["start"]) + 1.2
+            if shot.beats * 60 / shot.bpm > maximum_proof:
+                issues.append(
+                    f"{prefix}: live proof exceeds its {maximum_proof:.2f}s useful window and would freeze the last frame. Shorten this shot; use a separate still/detail composition for a further visual idea."
+                )
             if shot.beats * 60 / shot.bpm < min(needed, 12):
                 issues.append(
                     f"{prefix}: hold at least {min(needed, 12):.2f}s to show the interaction."
@@ -179,37 +220,36 @@ def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> l
                     issues.append(f"{prefix}: keep readable text inside 2.5% safe margins.")
                 if shot.beats * 60 / shot.bpm < 1:
                     issues.append(f"{prefix}: give text at least one second.")
-                for state in visible:
-                    # Conservative at planned states: overlays require an explicit opaque backing.
-                    media = [
-                        candidate
-                        for candidate in shot.layers[: shot.layers.index(layer)]
-                        if candidate.kind not in ("shape", "text")
-                    ]
+                # Compare simultaneous states, not all positions across the entire shot.
+                # Otherwise an opening fullscreen UI incorrectly forbids later type in
+                # the space it has already vacated. The rendered critic checks in-between frames.
+                media = [
+                    candidate
+                    for candidate in shot.layers[: shot.layers.index(layer)]
+                    if candidate.kind not in ("shape", "text")
+                ]
+                times = sorted(
+                    {state.beat for candidate in shot.layers for state in candidate.states}
+                )
+                times = sorted(
+                    set(times + [(a + b) / 2 for a, b in zip(times, times[1:], strict=False)])
+                )
+                for beat in times:
+                    state = layout_at(layer, beat)
+                    if state["opacity"] <= 0.5:
+                        continue
                     overlaps = any(
-                        s.opacity > 0.5
-                        and s.x < state.x + state.w
-                        and s.x + s.w > state.x
-                        and s.y < state.y + state.h
-                        and s.y + s.h > state.y
+                        rects_overlap(state, layout_at(other, beat))
+                        and layout_at(other, beat)["opacity"] > 0.5
                         for other in media
-                        for s in other.states
                     )
                     backing = any(
-                        other.kind == "shape"
-                        and any(
-                            s.opacity >= 0.95
-                            and s.x <= state.x
-                            and s.y <= state.y
-                            and s.x + s.w + 1e-6 >= state.x + state.w
-                            and s.y + s.h + 1e-6 >= state.y + state.h
-                            for s in other.states
-                        )
+                        other.kind == "shape" and covers(layout_at(other, beat), state)
                         for other in shot.layers[: shot.layers.index(layer)]
                     )
                     if overlaps and not backing:
                         issues.append(
-                            f"{prefix}: text {layer.id} overlaps product pixels without an opaque backing. Move type to negative space or a dedicated graphic shot."
+                            f"{prefix}: text {layer.id} overlaps product pixels without an opaque backing at beat {beat:g}. Move type to negative space or a dedicated graphic shot."
                         )
                         break
         if index >= 2 and all(
@@ -277,6 +317,11 @@ def compile_direction(plan: FilmDirection, scenes: list[dict]) -> list[dict]:
 
 
 def save_direction(folder: Path, plan: FilmDirection):
+    run = (
+        json.loads((folder / "director-run.json").read_text())
+        if (folder / "director-run.json").exists()
+        else {}
+    )
     (folder / "director-plan.json").write_text(plan.model_dump_json(indent=2))
     (folder / "style-guide.json").write_text(
         json.dumps(
@@ -284,6 +329,9 @@ def save_direction(folder: Path, plan: FilmDirection):
                 "concept": plan.concept,
                 "grammar": plan.grammar,
                 "reference": REFERENCES[plan.reference],
+                "reference_observations": run.get("reference_analysis"),
+                "prompt_version": run.get("prompt_version"),
+                "strategy": run.get("strategy"),
                 "render": {"width": 1920, "height": 1080, "fps": 30},
             },
             indent=2,
@@ -322,6 +370,8 @@ def direct_film(
     reasoner=None,
     reference_urls: list[str] | None = None,
     reference_analysis: dict | None = None,
+    geometry_effort: str | None = None,
+    prepared_treatment: FilmTreatment | None = None,
 ) -> FilmDirection:
     reasoner = reasoner or reason
     strategy = strategy or setting("CUTROOM_PROMPT_STRATEGY", "storyboard")
@@ -344,15 +394,43 @@ def direct_film(
     prompt = (
         RULES + f"\nProduct: {title}\nBrief: {brief}\nArt direction: {creative_direction}\n"
         f"Maximum duration: {target}s. Reference grammars: {json.dumps(REFERENCES)}\n"
-        f"Captures: {json.dumps([{k: s[k] for k in ('thumbnail', 'label', 'start', 'end', 'details', 'interactions', 'viewport', 'focus') if k in s} for s in sources])}\nVisible evidence: {json.dumps(evidence or [])[:12000]}\n"
+        "Live proof windows (seconds; budget readable action, not frozen padding): "
+        + json.dumps(
+            [
+                {
+                    "source": s["thumbnail"],
+                    "recorded_seconds": round(s["end"] - s["start"], 2),
+                    "max_seconds": round(
+                        max(
+                            s["end"] - s["start"],
+                            min(
+                                max(
+                                    (
+                                        e["time"] - s["start"] + 0.5
+                                        for e in s.get("interactions", [])
+                                    ),
+                                    default=1,
+                                ),
+                                12,
+                            ),
+                        )
+                        + 1.2,
+                        2,
+                    ),
+                }
+                for s in sources
+            ]
+        )
+        + "\n"
+        + f"Captures: {json.dumps([{k: s[k] for k in ('thumbnail', 'label', 'start', 'end', 'details', 'interactions', 'viewport', 'focus') if k in s} for s in sources])}\nVisible evidence: {json.dumps(evidence or [])[:12000]}\n"
         "Return the full film as JSON matching this schema. Keep concept to one sentence and grammar to three short sentences. Layer states use normalized x/y/w/h, pixel radius, local beat. "
         "The easing on a destination state controls movement toward that state. Omitted geometry inherits the preceding state. To hold, repeat geometry at a later beat before the next movement. Order layers back-to-front. "
         "Text uses size in pixels. Product is the settled screenshot; footage is the actual interaction. "
         "Do not cover footage with an opaque product screenshot.\n" + schema
     )
     prompt = enriched_prompt(prompt, strategy, reference_analysis)
-    treatment = None
-    if strategy == "storyboard":
+    treatment = prepared_treatment
+    if strategy in ("storyboard", "studies"):
         treatment_prompt = (
             prompt.split("Return the full film as JSON")[0]
             + "\n"
@@ -360,12 +438,15 @@ def direct_film(
         )
         (folder / "treatment-prompt.txt").write_text(treatment_prompt)
         treatment_errors = []
-        for _attempt in range(2):
+        for _attempt in range(0 if treatment is not None else 2):
             proposed = reasoner(
                 treatment_prompt + "\nValidation feedback: " + json.dumps(treatment_errors),
                 image,
                 max_tokens=4000,
                 motion=True,
+            )
+            (folder / f"treatment-proposal-{_attempt}.json").write_text(
+                json.dumps(proposed, indent=2)
             )
             try:
                 treatment = FilmTreatment.model_validate(proposed)
@@ -384,6 +465,7 @@ def direct_film(
             {
                 "prompt_version": PROMPT_VERSION,
                 "strategy": strategy,
+                "geometry_effort": geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
                 "reference_analysis": reference_analysis,
             },
             indent=2,
@@ -401,6 +483,7 @@ def direct_film(
                 image,
                 max_tokens=10000,
                 motion=True,
+                effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
             )
             previous = json.dumps(proposed)
             (folder / f"director-proposal-{attempt}.json").write_text(previous)
@@ -437,6 +520,7 @@ def review_film(
     checkpoint=None,
     *,
     reasoner=None,
+    geometry_effort: str | None = None,
 ) -> tuple[FilmDirection, dict]:
     """Inspect rendered state sequences, with at most two targeted revision attempts.
 
@@ -450,7 +534,7 @@ def review_film(
     creative_context = ""
     if (folder / "director-treatment.json").exists():
         creative_context = (
-            "\nPreserve the approved treatment: " + (folder / "director-treatment.json").read_text()
+            "\nPreserve the selected treatment: " + (folder / "director-treatment.json").read_text()
         )
     report = {"status": "needs_review", "passes": [], "revision_count": 0}
     for attempt in range(3):
@@ -498,6 +582,8 @@ def review_film(
             "Live footage includes the cursor action before the destination appears; do not call a short action lead-in a duplicated shot. "
             "Check clipping, type readability and contrast, obscured interactions, repeated compositions, "
             "awkward spatial jumps, empty pauses, and whether real product evidence is clear. "
+            "Also assess art direction against the supplied concept: flag tiny full-app insets, redundant copies of the same screen, graphic shots that finish moving early then hold without a readable reason, or typography too timid to establish hierarchy. "
+            "Describe concrete visible evidence for each design weakness and the intended improvement, not generic requests to make it more premium. "
             "Do not give numeric quality scores, invent defects, or request new product assets. "
             "An empty findings list means you found no defects in these sampled frames, not a guarantee about audio or every frame. "
             f"Film plan: {plan.model_dump_json()}"
@@ -539,6 +625,7 @@ def review_film(
                     image,
                     max_tokens=10000,
                     motion=True,
+                    effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
                 )
             )
             revised = constrain_geometry(revised)

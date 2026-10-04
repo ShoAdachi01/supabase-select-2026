@@ -156,28 +156,47 @@ def reason(
             content.append(
                 {"type": "input_image", "image_url": f"data:image/jpeg;base64,{screenshot}"}
             )
-        response = checked(
-            reasoning_request(
-                "https://api.openai.com/v1/responses",
-                motion=motion,
-                headers={"Authorization": f"Bearer {setting('OPENAI_API_KEY')}"},
-                json={
-                    "model": selected_model,
-                    **(
-                        {"reasoning": {"effort": selected_effort}}
-                        if motion and selected_model.startswith(("gpt-5", "gpt-6"))
-                        else {}
-                    ),
-                    "instructions": system,
-                    "input": [{"role": "user", "content": content}],
-                    "store": False,
-                    "text": {"format": {"type": "json_object"}},
-                    "max_output_tokens": max_tokens + (8000 if motion else 0),
-                },
-                timeout=240 if motion else 90,
+        request_body = {
+            "model": selected_model,
+            **(
+                {"reasoning": {"effort": selected_effort}}
+                if motion and selected_model.startswith(("gpt-5", "gpt-6"))
+                else {}
             ),
-            "OpenAI",
-        )
+            "instructions": system,
+            "input": [{"role": "user", "content": content}],
+            "store": False,
+            "text": {"format": {"type": "json_object"}},
+            "max_output_tokens": max_tokens + (8000 if motion else 0),
+        }
+        budget_attempts = []
+        for budget_attempt in range(2 if motion else 1):
+            response = checked(
+                reasoning_request(
+                    "https://api.openai.com/v1/responses",
+                    motion=motion,
+                    headers={"Authorization": f"Bearer {setting('OPENAI_API_KEY')}"},
+                    json=request_body,
+                    timeout=240 if motion else 90,
+                ),
+                "OpenAI",
+            )
+            response_data = response.json()
+            budget_attempts.append(response_data.get("usage", {}))
+            if response_data.get("status") != "incomplete":
+                break
+            if (
+                response_data.get("incomplete_details", {}).get("reason") != "max_output_tokens"
+                or budget_attempt == 1
+                or not motion
+            ):
+                raise ProviderError(
+                    "The director response was incomplete. No partial film plan was accepted."
+                )
+            request_body = {
+                **request_body,
+                "max_output_tokens": min(32000, request_body["max_output_tokens"] * 2),
+            }
         result = "".join(
             c.get("text", "")
             for block in response.json().get("output", [])
@@ -191,6 +210,7 @@ def reason(
             effort=selected_effort if motion else None,
             seconds=round(time.monotonic() - started, 2),
             usage=response.json().get("usage", {}),
+            usage_attempts=[response.json().get("usage", {})] if use_claude else budget_attempts,
         )
     result = result.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     value = json.loads(result)

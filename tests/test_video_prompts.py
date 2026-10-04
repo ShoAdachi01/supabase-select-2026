@@ -212,3 +212,95 @@ def test_video_reference_sampling_uses_local_bounded_decoder(tmp_path, monkeypat
     assert command[command.index("-t") + 1] == "24"
     assert options["timeout"] == 45
     assert "http" not in " ".join(command)
+
+
+def test_type_can_enter_space_after_product_has_moved_away():
+    from server.video_direction_models import DirectedShot
+
+    plan = film()
+    setup = DirectedShot.model_validate(
+        {
+            "source": "scene-0.jpg",
+            "label": "Introduce the project",
+            "purpose": "Connect the card to its proof",
+            "composition": "split",
+            "bpm": 120,
+            "beats": 6,
+            "layers": [
+                {
+                    "id": "screen",
+                    "kind": "product",
+                    "states": [
+                        {"beat": 0},
+                        {"beat": 1, "x": 0.55, "y": 0.1, "w": 0.4, "h": 0.8},
+                        {"beat": 6},
+                    ],
+                },
+                {
+                    "id": "copy",
+                    "kind": "text",
+                    "text": "Follow the work",
+                    "states": [
+                        {"beat": 0, "x": 0.05, "y": 0.2, "w": 0.4, "h": 0.2, "opacity": 0},
+                        {"beat": 2, "opacity": 0},
+                        {"beat": 3, "opacity": 1},
+                        {"beat": 6},
+                    ],
+                },
+            ],
+        }
+    )
+    plan.shots.insert(0, setup)
+    assert director.validate_evidence(plan, sources(), 30) == []
+    setup.layers[1].states[0].opacity = 1
+    assert any(
+        "overlaps product pixels" in error
+        for error in director.validate_evidence(plan, sources(), 30)
+    )
+
+
+def test_frozen_footage_padding_is_rejected_but_readable_hold_is_allowed():
+    plan = film()
+    assert director.validate_evidence(plan, sources(), 30) == []
+    plan.shots[-1].beats = 16
+    assert any(
+        "freeze the last frame" in issue
+        for issue in director.validate_evidence(plan, sources(), 30)
+    )
+
+
+def test_output_budget_exhaustion_is_retried_without_feeding_truncated_json(monkeypatch):
+    config = {"OPENAI_API_KEY": "test-key"}
+    monkeypatch.setattr(providers, "setting", lambda name, default="": config.get(name, default))
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "usage": {"output_tokens": 18000},
+                    "output": [],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "usage": {"output_tokens": 5000},
+                "output": [{"content": [{"type": "output_text", "text": '{"ready":true}'}]}],
+            },
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    telemetry = {}
+    assert providers.reason(
+        "Compose the film", motion=True, max_tokens=10000, telemetry=telemetry
+    ) == {"ready": True}
+    assert calls[0]["max_output_tokens"] == 18000
+    assert calls[1]["max_output_tokens"] == 32000
+    assert calls[0]["input"] == calls[1]["input"]
+    assert len(telemetry["usage_attempts"]) == 2

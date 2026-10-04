@@ -871,8 +871,9 @@ export default function Studio() {
                         />
                       </label>
                       <p className="field-hint">
-                        We study the visual style, not the reference’s branding. Direct MP4, WebM,
-                        and image links work best. If a page blocks access, we’ll tell you.
+                        We study up to 24 seconds of accessible video, or an image’s layout. Direct
+                        MP4, WebM, and image links work best. If a page blocks access, we’ll tell
+                        you.
                       </p>
                     </>
                   )}

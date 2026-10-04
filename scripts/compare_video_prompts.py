@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import re
@@ -11,8 +12,9 @@ import time
 from pathlib import Path
 
 from server.video_direction import compile_direction, direct_film, review_film
+from server.video_direction_models import FilmTreatment
 from server.video_models import TimelineClip
-from server.video_prompts import STRATEGIES
+from server.video_prompts import PROMPT_VERSION, STRATEGIES
 from server.video_providers import reason
 from server.video_reference import analyze_media
 from server.video_render import render
@@ -89,6 +91,12 @@ def main():
         "--direction",
         default="Confident, playful precision. Make a real product detail the protagonist. Strong hierarchy, restrained palette drawn from the product, varied scale and pace, decisive motion with readable holds. No recurring title-over-screen layout. Music and real interaction sounds, no narration.",
     )
+    parser.add_argument("--geometry-effort", choices=["low", "medium", "high"], default="medium")
+    parser.add_argument(
+        "--treatment",
+        type=Path,
+        help="Reuse an existing validated treatment for a controlled geometry/render follow-up",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -96,37 +104,81 @@ def main():
         rows = json.loads((args.output / "comparison.json").read_text())
     reference = None
     if args.reference:
+        reference_data = args.reference.read_bytes()
+        reference_hash = hashlib.sha256(reference_data).hexdigest()
         cached = args.output / "shared-reference" / "analysis.json"
-        if cached.exists():
+        origin = cached.parent / "source.json"
+        if (
+            cached.exists()
+            and origin.exists()
+            and json.loads(origin.read_text()).get("sha256") == reference_hash
+        ):
             reference = json.loads(cached.read_text())
         else:
             reference = analyze_media(
-                args.reference.read_bytes(),
+                reference_data,
                 "video/mp4",
                 cached.parent,
                 lambda *a, **kw: reason(
-                    *a, **kw, provider="openai", model=args.openai_model, effort=args.effort
+                    *a,
+                    **kw,
+                    provider=args.providers[0],
+                    model=args.openai_model if args.providers[0] == "openai" else args.claude_model,
+                    effort=args.effort,
                 ),
             )
+        origin.write_text(json.dumps({"sha256": reference_hash}))
+    source_hash = hashlib.sha256()
+    scenes_for_hash = json.loads((args.source / "source-scenes.json").read_text())
+    for asset in [
+        "source-scenes.json",
+        "raw.webm",
+        *[s["thumbnail"] for s in scenes_for_hash],
+        *[n for s in scenes_for_hash for n in s.get("details", [])],
+    ]:
+        source_hash.update((args.source / asset).read_bytes())
+    experiment = {
+        "capture_sha256": source_hash.hexdigest(),
+        "title": args.title,
+        "brief": args.brief,
+        "direction": args.direction,
+        "reference": reference,
+        "effort": args.effort,
+        "geometry_effort": args.geometry_effort,
+        "treatment_sha256": hashlib.sha256(args.treatment.read_bytes()).hexdigest()
+        if args.treatment
+        else None,
+        "review": args.review,
+        "prompt_version": PROMPT_VERSION,
+    }
+    (args.output / "experiment.json").write_text(json.dumps(experiment, indent=2))
     for provider in args.providers:
         model = args.openai_model if provider == "openai" else args.claude_model
         for strategy in args.strategies:
-            name = f"{provider}-{strategy}"
+            signature = hashlib.sha256(
+                json.dumps(
+                    {**experiment, "model": model, "provider": provider, "strategy": strategy},
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            name = f"{provider}-{strategy}-{signature[:8]}"
             if any(row["name"] == name and row["status"] == "rendered" for row in rows):
                 continue
             folder = args.output / name
             scenes = copy_capture(args.source, folder)
+            (folder / "experiment.json").write_text(json.dumps(experiment, indent=2))
             calls = []
 
             def request(*a, provider=provider, model=model, calls=calls, folder=folder, **kw):
                 telemetry = {}
+                call_effort = kw.pop("effort", args.effort)
                 try:
                     return reason(
                         *a,
                         **kw,
                         provider=provider,
                         model=model,
-                        effort=args.effort,
+                        effort=call_effort,
                         telemetry=telemetry,
                     )
                 finally:
@@ -135,9 +187,11 @@ def main():
 
             row = {
                 "name": name,
+                "signature": signature,
                 "provider": provider,
                 "model": model,
                 "effort": args.effort,
+                "geometry_effort": args.geometry_effort,
                 "strategy": strategy,
                 "reference": bool(reference),
                 "review_enabled": args.review,
@@ -155,10 +209,20 @@ def main():
                     strategy=strategy,
                     reasoner=request,
                     reference_analysis=reference,
+                    geometry_effort=args.geometry_effort,
+                    prepared_treatment=FilmTreatment.model_validate_json(args.treatment.read_text())
+                    if args.treatment
+                    else None,
                 )
                 if args.review:
                     plan, report = review_film(
-                        plan, scenes, folder, "midnight", 30, reasoner=request
+                        plan,
+                        scenes,
+                        folder,
+                        "midnight",
+                        30,
+                        reasoner=request,
+                        geometry_effort=args.geometry_effort,
                     )
                     row["review"] = report
                 compiled = compile_timeline(

@@ -1,7 +1,7 @@
 """Versioned production briefs. Strategies vary planning, never mandate a shot sequence."""
 
-PROMPT_VERSION = "motion-brief-v2"
-STRATEGIES = ("baseline", "detailed", "storyboard")
+PROMPT_VERSION = "motion-brief-v6"
+STRATEGIES = ("baseline", "detailed", "storyboard", "studies")
 
 CRAFT = """
 <production_brief>
@@ -85,6 +85,8 @@ def enriched_prompt(base: str, strategy: str, reference: dict | None = None) -> 
     import json
 
     result = base if strategy == "baseline" else base + "\n" + CRAFT
+    if strategy == "studies":
+        result += "\n" + MOTION_STUDIES
     if reference:
         result += (
             "\n<reference_observations>\n" + json.dumps(reference) + "\n</reference_observations>\n"
@@ -93,3 +95,38 @@ def enriched_prompt(base: str, strategy: str, reference: dict | None = None) -> 
             "Use only observed properties; do not infer motion or audio from a still image."
         )
     return result
+
+
+MOTION_STUDIES = """
+<motion_studies>
+These are small technical studies, NOT a film sequence or templates to copy. Invent an
+execution at least this intentional, using this product's actual evidence and your chosen motif.
+
+A. Detail becomes a world. A detail layer begins at x=.12,y=.22,w=.3,h=.3,radius=80.
+At beat .4 repeat that geometry (anticipation). At beat 1.2 it occupies x=0,y=0,w=1,h=1,
+radius=0 with spring easing. Hold to beat 2.4. The next shot can cut to fullscreen proof.
+Use a real detail large enough to recognize, not another miniature copy of the entire screen.
+
+B. Type has physical presence. On a solid brand-derived field, a 2–4 word line occupies
+x=.06,y=.2,w=.86,h=.5 at 180–220px. It enters with words or mask, settles within .4 seconds,
+and remains legible for 1 second. A thin accent shape tracks the text baseline and expands
+laterally in .2 seconds to lead the outgoing eye. Choose product-specific copy. An intentional
+type-only shot can have more character than adding three unrelated screenshots around a caption.
+
+C. A control hands off attention. A real detail at x=.08,y=.25,w=.38,h=.4 moves to
+x=.56,y=.25,w=.38,h=.4 over .35 seconds. Only AFTER arrival, type enters the vacated left half.
+Hold both for .8–1.2 seconds, then a decisive cut changes scale. Do not park this split for four
+seconds or decorate it with an unnecessary second screenshot. Use one dominant object.
+
+Translate seconds into the chosen BPM. Adapt geometry to source aspect ratios and safe text margins.
+Avoid making all three examples into consecutive scenes. You can reject them all if your concept
+has a stronger mechanism. These demonstrate the level of specificity required, not a house style.
+
+The previous drafts failed because they arranged screenshots and stopped. For this take, make
+scale and typography carry a clear idea. Use the whole canvas intentionally. No small full-app
+inset alongside another full-app screenshot unless comparing two genuinely different states.
+A graphic shot ends after its idea lands and can be understood; extra seconds are not polish.
+The treatment must state the exact dominant object and the entry/movement/settle/exit timing of
+each graphic passage, and the coordinates must actually implement that timing.
+</motion_studies>
+"""

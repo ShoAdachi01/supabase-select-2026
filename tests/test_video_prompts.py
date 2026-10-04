@@ -304,3 +304,30 @@ def test_output_budget_exhaustion_is_retried_without_feeding_truncated_json(monk
     assert calls[1]["max_output_tokens"] == 32000
     assert calls[0]["input"] == calls[1]["input"]
     assert len(telemetry["usage_attempts"]) == 2
+
+
+def test_repeated_incomplete_output_stops_and_retains_known_usage(monkeypatch):
+    monkeypatch.setattr(
+        providers,
+        "setting",
+        lambda name, default="": "test-key" if name == "OPENAI_API_KEY" else default,
+    )
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(
+            200,
+            json={
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "usage": {"output_tokens": kwargs["json"]["max_output_tokens"]},
+            },
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    telemetry = {}
+    with pytest.raises(providers.ProviderError, match="No partial film plan"):
+        providers.reason("Compose", motion=True, telemetry=telemetry)
+    assert len(calls) == 2
+    assert len(telemetry["usage_attempts"]) == 2

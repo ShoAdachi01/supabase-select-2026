@@ -183,6 +183,15 @@ def reason(
             )
             response_data = response.json()
             budget_attempts.append(response_data.get("usage", {}))
+            if telemetry is not None:
+                telemetry.update(
+                    provider="openai",
+                    model=selected_model,
+                    effort=selected_effort if motion else None,
+                    seconds=round(time.monotonic() - started, 2),
+                    usage=response_data.get("usage", {}),
+                    usage_attempts=list(budget_attempts),
+                )
             if response_data.get("status") != "incomplete":
                 break
             if (

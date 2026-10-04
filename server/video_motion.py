@@ -1,10 +1,8 @@
-"""Original launch motion design; exact text and real product imagery, frame by frame."""
+"""Frame-accurate typography and real UI reveals, with an exact handoff to footage."""
 
 from __future__ import annotations
 
-import math
 import subprocess
-import textwrap
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -13,26 +11,94 @@ from server.video_render import FFMPEG, font
 
 
 def ease(value: float) -> float:
-    return 1 - (1 - min(1, max(0, value))) ** 3
+    value = min(1, max(0, value))
+    return value * value * (3 - 2 * value)
+
+
+def text_lines(text: str, face, width: int) -> list[str]:
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lines = [""]
+    for word in text.split():
+        candidate = f"{lines[-1]} {word}".strip()
+        if draw.textlength(candidate, font=face) > width and lines[-1]:
+            lines.append(word)
+        else:
+            lines[-1] = candidate
+    return lines
+
+
+def motion_frame(
+    scene: dict, theme: str, t: float, duration: float, product: Image.Image | None
+) -> Image.Image:
+    dark = theme == "midnight"
+    bg, fg = ("#0d1120", "#ffffff") if dark else ("#f7f9fc", "#131b30")
+    muted, accent = ("#a6b4cf", "#b4c6ff") if dark else ("#59657c", "#4a61e8")
+    layout = scene.get("layout", "hook")
+    reveal = product is not None and layout != "outro"
+    # Last frame equals the following full-screen shot, with no border or lingering title.
+    handoff = ease((t - (duration - 0.8)) / (0.8 - 1 / 30)) if reveal else 0
+    if handoff >= 1:
+        return product.copy()
+    canvas = Image.new("RGB", (1920, 1080), bg)
+    ink = Image.new("RGBA", canvas.size)
+    draw = ImageDraw.Draw(ink)
+    entrance = ease(t / 0.42)
+    offset = round(36 * (1 - entrance))
+    left = 120
+    top = 275 if layout == "hook" else 300
+    width = 760 if layout == "hook" and reveal else 1600
+    face = font(104 if layout == "hook" else 116)
+    lines = text_lines(scene.get("headline", ""), face, width)
+    # Long user copy fits instead of being silently truncated.
+    if len(lines) > 4:
+        face = font(72)
+        lines = text_lines(scene.get("headline", ""), face, width)
+    line_height = face.size + 12
+    draw.rounded_rectangle((left, top - 74, left + round(72 * entrance), top - 68), 3, fill=accent)
+    for i, line in enumerate(lines):
+        draw.text((left, top + i * line_height + offset), line, font=face, fill=fg)
+    subtitle_top = top + len(lines) * line_height + 34
+    for i, line in enumerate(text_lines(scene.get("subtitle", ""), font(30), width)):
+        draw.text((left + 4, subtitle_top + i * 40 + offset), line, font=font(30), fill=muted)
+    opacity = entrance * (1 - ease(handoff * 2))
+    ink.putalpha(ink.getchannel("A").point(lambda a: round(a * opacity)))
+    canvas = Image.alpha_composite(canvas.convert("RGBA"), ink).convert("RGB")
+    if reveal:
+        if layout == "hook":
+            start_width, start_x, start_y = 900, 990, 370
+        else:
+            start_width, start_x, start_y = 1056, 760, 660
+        w = round(start_width + (1920 - start_width) * handoff)
+        h = round(w * 9 / 16)
+        x = round(start_x * (1 - handoff))
+        y = round((start_y + 42 * (1 - entrance)) * (1 - handoff))
+        shot = product.resize((w, h), Image.Resampling.LANCZOS)
+        mask = Image.new("L", (w, h))
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, w, h), round(18 * (1 - handoff)), fill=255)
+        shadow = ImageDraw.Draw(canvas)
+        for spread in range(18, 0, -3):
+            shade = "#090c16" if dark else "#e6eaf2"
+            shadow.rounded_rectangle(
+                (x - spread, y - spread + 14, x + w + spread, y + h + spread + 14), 24, fill=shade
+            )
+        canvas.paste(shot, (x, y), mask)
+    elif layout == "outro":
+        draw = ImageDraw.Draw(canvas)
+        y = min(930, subtitle_top + 120)
+        # A single underline resolves with the soundtrack instead of a fake button.
+        draw.rounded_rectangle(
+            (124, y, 124 + max(1, round(460 * ease(t / 0.9))), y + 5), 3, fill=accent
+        )
+    return canvas
 
 
 def motion_source(
     folder: Path, index: int, scene: dict, theme: str, duration: float, product: Path | None
 ) -> Path:
-    """Stream frames to FFmpeg, without keeping an entire animation in memory."""
-    dark = theme == "midnight"
-    bg = "#111521" if dark else "#f3f0e8"
-    fg = "#f9f7ee" if dark else "#242922"
-    muted = "#a4b0a4" if dark else "#677160"
-    accent = "#f57558"
-    base = Image.new("RGB", (1920, 1080), bg)
-    grid = ImageDraw.Draw(base)
-    for x in range(0, 1920, 96):
-        for y in range(0, 1080, 96):
-            grid.ellipse((x, y, x + 2, y + 2), fill="#272e38" if dark else "#d9ddd1")
     screenshot = None
     if product and product.exists():
-        screenshot = Image.open(product).convert("RGB").resize((770, 433))
+        with Image.open(product) as source:
+            screenshot = source.convert("RGB").resize((1920, 1080), Image.Resampling.LANCZOS)
     output = folder / f"motion-{index}.mp4"
     command = [
         FFMPEG,
@@ -68,86 +134,8 @@ def motion_source(
     )
     try:
         for number in range(round(duration * 30)):
-            t = number / 30
-            canvas = base.copy()
-            draw = ImageDraw.Draw(canvas)
-            reveal = ease(t / 0.8)
-            drift = math.sin(t * 1.3) * 22
-            layout = scene.get("layout", "hook")
-            draw.ellipse((1270 + drift, 60, 1930 + drift, 720), outline=accent, width=3)
-            draw.ellipse((1390 + drift, 180, 1810 + drift, 600), outline="#8caa86", width=2)
-            draw.rounded_rectangle((130, 134, 370, 184), 25, fill=accent)
-            draw.text(
-                (250, 159),
-                {
-                    "hook": "MEET YOUR PRODUCT",
-                    "benefit": "IN THE SPOTLIGHT",
-                    "outro": "YOUR NEXT STEP",
-                }[layout],
-                fill="#17211a",
-                font=font(17),
-                anchor="mm",
-            )
-            line_width = 23 if layout == "hook" and screenshot else 32
-            lines = textwrap.wrap(scene.get("headline", ""), width=line_width)[:4]
-            for line_index, line in enumerate(lines):
-                progress = ease((t - line_index * 0.12) / 0.65)
-                if progress <= 0:
-                    continue
-                layer = Image.new("RGBA", canvas.size)
-                ink = ImageDraw.Draw(layer)
-                ink.text(
-                    (130, 263 + line_index * 114 + int((1 - progress) * 64)),
-                    line,
-                    fill=fg,
-                    font=font(96),
-                )
-                layer.putalpha(layer.getchannel("A").point(lambda a, p=progress: int(a * p)))
-                canvas = Image.alpha_composite(canvas.convert("RGBA"), layer).convert("RGB")
-            draw = ImageDraw.Draw(canvas)
-            subtitle_y = min(780, 300 + len(lines) * 114)
-            for line_index, line in enumerate(
-                textwrap.wrap(scene.get("subtitle", ""), width=65)[:2]
-            ):
-                draw.text((134, subtitle_y + line_index * 43), line, fill=muted, font=font(29))
-            if screenshot and layout == "hook":
-                x = round(1030 + 180 * (1 - reveal))
-                y = round(357 + drift)
-                draw.rounded_rectangle(
-                    (x - 14, y - 53, x + 784, y + 448),
-                    23,
-                    fill="#ffffff" if not dark else "#2b3440",
-                    outline="#8caa86",
-                    width=2,
-                )
-                for dot, color in enumerate((accent, "#edcb78", "#8caa86")):
-                    draw.ellipse((x + 9 + dot * 24, y - 32, x + 19 + dot * 24, y - 22), fill=color)
-                canvas.paste(screenshot, (x, y))
-            elif layout == "benefit":
-                for i, word in enumerate(("FOCUS", "FLOW", "FORWARD")):
-                    x = 140 + i * 410
-                    y = 805 + round(math.sin(t * 2 + i) * 12)
-                    draw.rounded_rectangle(
-                        (x, y, x + 360, y + 105), 26, outline=accent if i == 1 else muted, width=2
-                    )
-                    draw.text((x + 180, y + 52), word, font=font(29), fill=fg, anchor="mm")
-            elif layout == "outro":
-                x = 140
-                y = 770 + round(50 * (1 - reveal))
-                draw.rounded_rectangle((x, y, x + 470, y + 98), 49, fill=accent)
-                draw.text(
-                    (x + 235, y + 49),
-                    "TAKE A CLOSER LOOK  →",
-                    font=font(27),
-                    fill="#19221b",
-                    anchor="mm",
-                )
-            draw.text((140, 1000), "PRODUCT / LAUNCH", font=font(19), fill=muted)
-            draw.rounded_rectangle((1530, 1003, 1790, 1008), 3, fill=muted)
-            draw.rounded_rectangle(
-                (1530, 1003, 1530 + max(1, int(260 * t / duration)), 1008), 3, fill=accent
-            )
-            if number == min(30, round(duration * 30) - 1):
+            canvas = motion_frame(scene, theme, number / 30, duration, screenshot)
+            if number == min(20, round(duration * 30) - 1):
                 canvas.save(folder / f"edit-{index}.jpg", quality=90)
             process.stdin.write(canvas.tobytes())
         process.stdin.close()

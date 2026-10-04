@@ -102,7 +102,7 @@ try {
       if (!document.body) return;
       const style = document.createElement('style');
       style.textContent =
-        '*{cursor:none!important}html{scroll-behavior:smooth!important}[data-cutroom-cursor]{position:fixed;left:0;top:0;width:22px;height:28px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 3px #0005);transition:transform 650ms cubic-bezier(.22,1,.36,1)}';
+        '*{cursor:none!important}html{scroll-behavior:smooth!important}[data-cutroom-cursor]{position:fixed;left:0;top:0;width:22px;height:28px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 3px #0005);transition:transform 300ms cubic-bezier(.22,1,.36,1)}';
       document.head.append(style);
       const cursor = document.createElement('div');
       cursor.dataset.cutroomCursor = 'true';
@@ -197,6 +197,7 @@ try {
       action: action.type,
     };
     try {
+      let showResult = action.shot === 'result';
       if (['click', 'fill', 'select'].includes(action.type)) {
         if (!Number.isInteger(action.id)) throw new Error('Choose a visible element ID.');
         const el = page.locator(`[data-cutroom-id="${action.id}"]`).first();
@@ -210,6 +211,14 @@ try {
           )
         )
           throw new Error('That action is outside the demo recording scope.');
+        if (action.type === 'click' && action.shot !== 'action') {
+          showResult ||= await el.evaluate((node) =>
+            Boolean(
+              node.closest('nav,aside,[role="navigation"],[role="tablist"],.tabs') ||
+              node.matches('a[href],[role="tab"]'),
+            ),
+          );
+        }
         await el.scrollIntoViewIfNeeded();
         const box = await el.boundingBox();
         if (box) {
@@ -218,14 +227,14 @@ try {
             const c = document.querySelector('[data-cutroom-cursor]');
             if (c) c.style.transform = `translate(${x}px,${y}px)`;
           }, scene.focus);
-          await page.waitForTimeout(750);
+          await page.waitForTimeout(320);
         }
         if (action.type === 'click') await el.click();
         else if (action.type === 'select')
           await el.selectOption(String(action.value || '').slice(0, 500));
         else {
           await el.fill('');
-          await el.pressSequentially(String(action.value || '').slice(0, 500), { delay: 35 });
+          await el.pressSequentially(String(action.value || '').slice(0, 500), { delay: 18 });
         }
       } else if (action.type === 'scroll') {
         await page.evaluate(
@@ -235,7 +244,18 @@ try {
       } else if (action.type === 'press' && ['Enter', 'Escape', 'Tab'].includes(action.key)) {
         await page.keyboard.press(action.key);
       } else if (action.type !== 'hold') throw new Error('Unsupported browser action.');
-      await page.waitForTimeout(1800);
+      await page.waitForLoadState('domcontentloaded');
+      await page.waitForTimeout(800);
+      if (showResult) {
+        // Page navigation is preparation. Film the ready destination rather than its loading state.
+        scene.start = elapsed();
+        scene.focus = { x: 640, y: 360 };
+        scene.shot = 'result';
+        await page.waitForTimeout(3200);
+      } else {
+        scene.shot = 'action';
+        await page.waitForTimeout(800);
+      }
       scene.end = elapsed();
       await snapshot(scene);
       send(await observe());

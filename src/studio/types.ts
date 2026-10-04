@@ -20,6 +20,7 @@ export type TimelineClip = {
   subtitle: string;
   layout: 'hook' | 'benefit' | 'outro';
   duration: number;
+  camera?: 'wide' | 'push';
   trim_start: number;
   trim_end?: number | null;
   enabled: boolean;

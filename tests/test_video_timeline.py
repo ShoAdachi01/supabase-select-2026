@@ -226,3 +226,67 @@ def test_untrusted_video_download_location_is_rejected(tmp_path):
         video_generation.download_generation(
             {"provider": "veo"}, "https://evil.example/private", tmp_path / "video.mp4"
         )
+
+
+def test_launch_recuts_overview_and_copy_without_changing_capture():
+    source = job()
+    source["payload"]["scenes"][0]["action"] = "overview"
+    before = deepcopy(source)
+    clips = launch_clips(
+        source["payload"]["scenes"], "Meridian", {"narration": ["One home.", "Keep work moving."]}
+    )
+    assert clips[1]["enabled"] is False
+    assert clips[2]["narration"] == "Keep work moving."
+    assert all(c["transition"] == "cut" for c in clips)
+    assert all(not c["narration"] for c in clips if c["kind"] == "title")
+    assert sum(c["duration"] for c in clips if c["enabled"]) < 30
+    assert source == before
+
+
+def test_reveal_lands_exactly_on_next_product_frame():
+    import numpy as np
+    from PIL import Image
+
+    from server.video_motion import motion_frame
+
+    pixels = np.random.default_rng(42).integers(0, 256, (1080, 1920, 3), dtype=np.uint8)
+    product = Image.fromarray(pixels)
+    for layout in ("hook", "benefit"):
+        scene = {"layout": layout, "headline": "Launch with clarity."}
+        opening = motion_frame(scene, "midnight", 0.5, 2.4, product)
+        last = motion_frame(scene, "midnight", 2.4 - 1 / 30, 2.4, product)
+        assert not np.array_equal(np.array(opening), pixels)
+        assert np.array_equal(np.array(last), pixels)
+
+
+def test_short_shot_is_full_screen_and_keeps_complete_speech(tmp_path):
+    import numpy as np
+    from PIL import Image
+
+    from server.video_render import ffmpeg, render
+
+    raw, audio = tmp_path / "raw.webm", tmp_path / "speech.wav"
+    ffmpeg(
+        "-f", "lavfi", "-i", "color=c=green:s=320x180:r=30", "-t", "1", "-c:v", "libvpx", str(raw)
+    )
+    ffmpeg("-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "2.7", str(audio))
+    scenes = [
+        {
+            "kind": "browser",
+            "start": 0,
+            "end": 1,
+            "duration": 1.6,
+            "label": "Product",
+            "narration": "",
+            "transition": "cut",
+        }
+    ]
+    result = render(tmp_path, raw, scenes, "Product", "paper", "none", [audio])
+    assert 2.8 < result["duration_seconds"] < 3
+    frame = tmp_path / "check.png"
+    ffmpeg("-ss", "0.5", "-i", str(tmp_path / "film.mp4"), "-frames:v", "1", str(frame))
+    pixels = np.array(Image.open(frame))
+    for y, x in ((20, 20), (20, 1900), (1060, 20), (1060, 1900)):
+        assert pixels[y, x, 1] > 100
+        assert pixels[y, x, 0] < 10
+        assert pixels[y, x, 2] < 10

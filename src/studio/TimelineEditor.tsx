@@ -25,7 +25,8 @@ export function newTitle(layout: TimelineClip['layout'] = 'hook'): TimelineClip 
     duration: 4,
     trim_start: 0,
     enabled: true,
-    transition: 'dissolve',
+    transition: 'cut',
+    camera: 'wide',
   };
 }
 
@@ -213,19 +214,33 @@ export default function TimelineEditor({
                   </select>
                 </label>
               )}
-              <label>
-                Minimum duration (seconds)
-                <input
-                  type="number"
-                  min={2}
-                  max={clip.kind === 'generated' ? clip.duration : 15}
-                  step={0.1}
-                  value={clip.duration}
-                  disabled={disabled}
-                  onChange={(e) => patch({ duration: Number(e.target.value) })}
-                />
-              </label>
             </>
+          )}
+          <label>
+            Shot duration (seconds)
+            <input
+              aria-label="Shot duration"
+              type="number"
+              min={1}
+              max={clip.kind === 'generated' ? clip.duration : 15}
+              step={0.1}
+              value={clip.duration}
+              disabled={disabled}
+              onChange={(e) => patch({ duration: Number(e.target.value) })}
+            />
+          </label>
+          {clip.kind === 'browser' && (
+            <label>
+              Camera
+              <select
+                value={clip.camera || 'wide'}
+                disabled={disabled}
+                onChange={(e) => patch({ camera: e.target.value as TimelineClip['camera'] })}
+              >
+                <option value="wide">Full screen · steady</option>
+                <option value="push">Gentle push toward action</option>
+              </select>
+            </label>
           )}
           {source && (
             <>
@@ -258,8 +273,8 @@ export default function TimelineEditor({
                 </label>
               </div>
               <small className="field-hint">
-                Trims are relative to this {available.toFixed(1)}s capture. The final frame holds if
-                the narration is longer.
+                Trims are relative to this {available.toFixed(1)}s capture. Shorten the voiceover to
+                keep the edit tight; longer speech extends the shot.
               </small>
             </>
           )}
@@ -278,6 +293,12 @@ export default function TimelineEditor({
               onChange={(e) => patch({ narration: e.target.value })}
             />
           </label>
+          {clip.narration.trim().split(/\s+/).length > clip.duration * 2.5 && (
+            <small className="field-hint">
+              This script may run past the shot. Aim for about {Math.floor(clip.duration * 2.3)}{' '}
+              words.
+            </small>
+          )}
           <button
             className="text-button"
             disabled={disabled || !clip.narration.trim() || previewing}

@@ -36,40 +36,19 @@ def font(size: int):
     return ImageFont.load_default(size=size)
 
 
-def frame(path: Path, title: str, label: str, theme: str, number: int):
-    dark = theme == "midnight"
-    color = (16, 19, 31) if dark else (238, 236, 229)
-    canvas = Image.new("RGB", (1920, 1080), color)
-    draw = ImageDraw.Draw(canvas)
-    # A restrained radial tint; the product remains the subject.
-    for radius in range(1400, 50, -10):
-        amount = (1 - radius / 1400) * 0.16
-        tint = tuple(
-            int(c * (1 - amount) + t * amount) for c, t in zip(color, (96, 74, 150), strict=True)
-        )
-        draw.ellipse((1200 - radius, -200 - radius, 1200 + radius, -200 + radius), fill=tint)
-    fg = "#f1f0f6" if dark else "#292a31"
-    muted = "#9599b0" if dark else "#74747d"
-    draw.text((160, 32), title[:70], font=font(27), fill=fg)
-    draw.text((1760, 36), f"{number:02d}", font=font(23), fill=muted, anchor="ra")
-    draw.rounded_rectangle((148, 83, 1772, 1020), 18, fill="#090b14" if dark else "#ffffff")
-    draw.rounded_rectangle((160, 88, 1760, 122), 10, fill="#252734" if dark else "#e4e4e9")
-    for i, c in enumerate(("#fd7474", "#edc363", "#78c899")):
-        draw.ellipse((180 + i * 22, 98, 190 + i * 22, 108), fill=c)
-    draw.text((260, 94), label[:85], font=font(17), fill=muted)
-    draw.text((160, 1043), "CUTROOM  /  PRODUCT FILM", font=font(17), fill=muted)
-    draw.text((1760, 1043), "1920 × 1080", font=font(17), fill=muted, anchor="ra")
-    canvas.save(path)
-
-
 def caption(path: Path, text: str):
-    canvas = Image.new("RGBA", (1600, 115), (0, 0, 0, 0))
+    canvas = Image.new("RGBA", (1920, 120), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
-    lines = textwrap.wrap(text, width=85)[:2]
+    lines = textwrap.wrap(text, width=72)[:2]
     if lines:
-        draw.rounded_rectangle((90, 5, 1510, 106), 18, fill=(14, 17, 26, 225))
+        face = font(32)
+        width = min(1760, max(draw.textlength(line, font=face) for line in lines) + 64)
+        height = 32 + len(lines) * 40
+        draw.rounded_rectangle(
+            ((1920 - width) / 2, 0, (1920 + width) / 2, height), 16, fill=(14, 17, 26, 222)
+        )
         for index, line in enumerate(lines):
-            draw.text((800, 27 + index * 34), line, font=font(25), fill="white", anchor="mt")
+            draw.text((960, 16 + index * 40), line, font=face, fill="white", anchor="mt")
     canvas.save(path)
 
 
@@ -128,9 +107,18 @@ def original_music(path: Path, duration: float, style: str):
             )
         if style == "momentum":
             phase = local % 0.4
+            notes = np.array(chords[i % len(chords)]) * 2
+            melody = notes[(local / 0.4).astype(int) % 3]
+            track[mask] += 0.042 * np.sin(2 * np.pi * melody * phase) * np.exp(-phase * 11)
+            kick = local % 0.8
             track[mask] += (
-                0.03 * np.sin(2 * np.pi * (800 + local * 100) * local) * np.exp(-phase * 28)
+                0.1
+                * np.sin(2 * np.pi * (48 * kick + 4 * (1 - np.exp(-kick * 32))))
+                * np.exp(-kick * 18)
             )
+            noise = np.random.default_rng(i).standard_normal(len(local))
+            hat = noise - np.roll(noise, 1)
+            track[mask] += 0.007 * hat * np.exp(-phase * 85)
     fade = np.minimum(t / 1.2, 1) * np.minimum((duration - t) / 1.8, 1)
     pcm = np.clip(track * fade * 32767, -32767, 32767).astype("<i2")
     with wave.open(str(path), "wb") as out:
@@ -153,16 +141,15 @@ def render(
     clips, lengths = [], []
     for i, (scene, audio) in enumerate(zip(scenes, audio_paths, strict=True)):
         background, captions = directory / f"frame-{i}.png", directory / f"caption-{i}.png"
-        frame(background, title, scene["label"], theme, i + 1)
+        Image.new("RGB", (1920, 1080), "black").save(background)
         caption(captions, scene.get("narration", ""))
         audio_wav = directory / f"audio-{i}.wav"
+        duration = scene.get("duration", 4)
         if audio:
             ffmpeg("-i", str(audio), "-ac", "2", "-ar", "48000", str(audio_wav))
-            duration = max(3.5, wav_duration(audio_wav) + 0.35)
+            # Preserve exact edited speech. Never clip a sentence to meet a shot budget.
+            duration = max(duration, wav_duration(audio_wav) + 0.15)
         else:
-            duration = max(4, min(9, len(scene.get("narration", "").split()) / 2.4))
-            if scene.get("kind") in ("title", "generated"):
-                duration = scene.get("duration", 4)
             ffmpeg(
                 "-f",
                 "lavfi",
@@ -172,34 +159,49 @@ def render(
                 str(duration),
                 str(audio_wav),
             )
-        if scene.get("kind") in ("title", "generated"):
-            duration = max(duration, scene.get("duration", 4))
         duration = math.ceil(duration * 30) / 30
         lengths.append(duration)
         start = max(0, scene.get("start", 0))
         recorded = max(0.4, scene.get("end", duration) - start)
         focus = scene.get("focus", {"x": 640, "y": 360})
         fx, fy = min(1, max(0, focus["x"] / 1280)), min(1, max(0, focus["y"] / 720))
-        # One output frame per input frame preserves the real click/typing footage.
-        zoom = f"1+0.12*sin(PI*min(on/{int(duration * 30)},1))"
+        # Compress long action recordings into the edit budget. Short takes retain real-time motion.
+        speed = max(1, recorded / duration)
+        zoom = (
+            f"1+0.10*pow(min(on/{max(1, int(duration * 30) - 1)},1),2)*(3-2*min(on/{max(1, int(duration * 30) - 1)},1))"
+            if scene.get("camera") == "push"
+            else "1"
+        )
+        size = "3840:2160" if scene.get("camera") == "push" else "1920:1080"
         filters = (
-            f"[1:v]fps=30,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration},"
-            f"setpts=PTS-STARTPTS,scale=2560:1440,"
-            f"zoompan=z='{zoom}':x='(iw-iw/zoom)*{fx}':y='(ih-ih/zoom)*{fy}':d=1:s=1600x900:fps=30[v];"
-            f"[0:v][v]overlay=160:112[composed];[composed][2:v]overlay=160:890,"
-            "format=yuv420p[out];"
+            f"[1:v]setpts=(PTS-STARTPTS)/{speed},fps=30,"
+            f"scale={size}:force_original_aspect_ratio=increase,crop={size},"
+            f"tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration},"
+            f"zoompan=z='{zoom}':x='(iw-iw/zoom)*{fx}':y='(ih-ih/zoom)*{fy}':d=1:s=1920x1080:fps=30[v];"
+            "[v][2:v]overlay=0:936,format=yuv420p[out];"
             f"[3:a]apad,atrim=duration={duration},afade=t=in:d=0.05,afade=t=out:st={max(0, duration - 0.15)}:d=0.15[a]"
         )
         source = raw
         if scene.get("kind") == "title":
             from server.video_motion import motion_source
 
-            product = next(
-                (s.get("thumbnail") for s in scenes if s.get("kind", "browser") == "browser"), None
-            )
-            source = motion_source(
-                directory, i, scene, theme, duration, directory / product if product else None
-            )
+            # Match the exact first frame of the next visible product shot, including its trim.
+            following = scenes[i + 1] if i + 1 < len(scenes) else None
+            product = None
+            if following and following.get("kind", "browser") == "browser":
+                product = directory / f"reveal-{i}.png"
+                ffmpeg(
+                    "-ss",
+                    str(max(0, following.get("start", 0))),
+                    "-i",
+                    str(raw),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080",
+                    str(product),
+                )
+            source = motion_source(directory, i, scene, theme, duration, product)
             start, recorded = 0, duration
             scene["thumbnail"] = f"edit-{i}.jpg"
         elif scene.get("kind") == "generated":
@@ -214,12 +216,12 @@ def render(
             filters = (
                 f"[1:v]fps=30,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
                 f"tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration},setpts=PTS-STARTPTS[v];"
-                "[v][2:v]overlay=160:940,format=yuv420p[out];"
+                "[v][2:v]overlay=0:936,format=yuv420p[out];"
                 f"[3:a]apad,atrim=duration={duration},afade=t=in:d=0.05,afade=t=out:st={max(0, duration - 0.15)}:d=0.15[a]"
             )
             if scene.get("kind") == "generated":
                 filters = filters.replace(
-                    "[v][2:v]overlay=160:940",
+                    "[v][2:v]overlay=0:936",
                     "[2:v]format=rgba,fade=t=in:st=0:d=0.6:alpha=1[type];[v][type]overlay=x=0:y='40*(1-min(t/0.6,1))'",
                 )
         if scene.get("transition") == "fade":

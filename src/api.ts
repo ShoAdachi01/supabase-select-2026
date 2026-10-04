@@ -9,13 +9,15 @@ export function initialize(): Promise<Config> {
   if (!initPromise)
     initPromise = (async () => {
       const response = await fetch('/api/config');
-      if (!response.ok)
-        throw new Error('The studio server is unavailable. Start the API server and refresh.');
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(
+          error.detail || 'The studio server is unavailable. Please try again shortly.',
+        );
+      }
       config = await response.json();
       if (!config.configured)
-        throw new Error(
-          'Start Supabase and run python3 scripts/local_env.py, then restart the API server.',
-        );
+        throw new Error('The workspace service is not configured yet. Please try again later.');
       if (config.mode === 'supabase') {
         client = createClient(config.supabase_url, config.supabase_key);
         const { data, error: sessionError } = await client.auth.getSession();

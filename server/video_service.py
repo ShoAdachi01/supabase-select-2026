@@ -337,7 +337,7 @@ def film(store: Store, job: dict, body: VideoInput):
             if body.voice == "none":
                 result = (
                     music_launch_plan(body.title, body.brief, scenes, folder, views)
-                    if capabilities()["reasoning"]
+                    if capabilities()["reasoning"] and body.format != "launch"
                     else {}
                 )
                 labels = result.get("labels", [])
@@ -391,6 +391,47 @@ def film(store: Store, job: dict, body: VideoInput):
                 if body.format == "launch"
                 else browser_clips(scenes)
             )
+            if body.format == "launch" and capabilities()["reasoning"]:
+                from server.video_direction import compile_direction, direct_film, review_film
+
+                event(
+                    store,
+                    job,
+                    "scripting",
+                    "Directing a film-specific composition and beat grid from your product.",
+                    62,
+                )
+                direction = direct_film(
+                    body.title,
+                    body.brief,
+                    scenes,
+                    folder,
+                    body.duration,
+                    body.creative_direction,
+                    views,
+                )
+                event(
+                    store,
+                    job,
+                    "rendering",
+                    "Rendering preview states and checking composition, continuity, and readability.",
+                    65,
+                )
+                direction, review = review_film(
+                    direction,
+                    scenes,
+                    folder,
+                    body.theme,
+                    body.duration,
+                    lambda: cancelled(store, job),
+                )
+                job["payload"]["timeline"] = compile_direction(direction, scenes)
+                job["payload"]["direction"] = {
+                    "concept": direction.concept,
+                    "grammar": direction.grammar,
+                    "reference": direction.reference,
+                    "review": review,
+                }
             event(
                 store,
                 job,
@@ -503,7 +544,7 @@ def finish_render(store: Store, job: dict, folder: Path):
             "rendering",
             f"Composing scene {index} of {count}: framing, zooms, captions, and audio."
             if index
-            else "Animating product details, typography, and camera movement.",
+            else "Composing product footage, object motion, typography, and sound.",
             72 + int(index / count * 20),
         )
 

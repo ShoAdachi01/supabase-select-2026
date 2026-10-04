@@ -31,6 +31,9 @@ def interaction_schedule(scenes):
     for scene in scenes:
         if scene.get("kind", "browser") != "browser":
             continue
+        direction = scene.get("direction")
+        if direction and not any(layer["kind"] == "footage" for layer in direction["layers"]):
+            continue
         start, end = scene.get("start", 0), scene.get("end", 0)
         speed = max(1, max(0.4, end - start) / scene["duration"])
         viewport = scene.get("viewport", {"width": 1920})
@@ -62,20 +65,38 @@ def interaction_audio(path: Path, duration: float, scenes):
         sound *= np.minimum(t * 2200, 1)
         sound *= 3 if click else 2
         place(track, sound, event["time"], event["pan"])
+    # Graphic accents share the animation clock; recorded clicks are never snapped to a beat.
+    for i, event in enumerate(motion_schedule(scenes)):
+        t = np.arange(round(RATE * (0.22 if event["kind"] == "whoosh" else 0.12))) / RATE
+        if event["kind"] == "whoosh":
+            noise = np.random.default_rng(900 + i).standard_normal(len(t))
+            sound = (
+                np.convolve(noise, np.ones(9) / 9, mode="same")
+                * np.sin(np.pi * t / 0.22) ** 2
+                * 0.11
+            )
+        else:
+            frequency = 70 if event["kind"] == "thump" else 1600
+            sound = (
+                0.14 * np.sin(2 * np.pi * frequency * t) * np.exp(-t * 40) * np.minimum(t * 1200, 1)
+            )
+        place(track, sound, event["time"])
+        schedule.append(event)
     write_audio(path, track)
     return schedule
 
 
-def launch_music(path: Path, duration: float):
-    """A sparse stereo pluck/bass score at 150 BPM, with an intro and closing cadence."""
+def launch_music(path: Path, duration: float, bpm: int = 150, *, ambient: bool = False):
+    """A deterministic stereo pluck/bass score on the film's beat clock."""
     track = np.zeros((math.ceil(duration * RATE), 2))
     chords = [(57, 60, 64, 67), (53, 57, 60, 64), (60, 64, 67, 71), (55, 59, 62, 67)]
 
     def hz(note):
         return 440 * 2 ** ((note - 69) / 12)
 
-    for step in range(math.ceil(duration / 0.4)):
-        at = step * 0.4
+    beat = 60 / bpm
+    for step in range(math.ceil(duration / beat)):
+        at = step * beat
         chord = chords[(step // 8) % 4]
         # Leave room for clicks and typing: the melody breathes rather than playing every beat.
         if step % 8 in (0, 2, 3, 6):
@@ -88,7 +109,7 @@ def launch_music(path: Path, duration: float):
             bell *= np.minimum(t * 400, 1)
             pan = -0.35 if step % 4 < 2 else 0.35
             place(track, bell, at, pan)
-            place(track, bell * 0.18, at + 0.3, -pan)
+            place(track, bell * 0.18, at + beat * 0.75, -pan)
         if step % 4 == 0:
             t = np.arange(round(RATE * 0.7)) / RATE
             bass = (
@@ -98,7 +119,7 @@ def launch_music(path: Path, duration: float):
                 * np.minimum(t * 100, 1)
             )
             place(track, bass, at)
-        if at >= 2.4 and at < duration - 1.6:
+        if not ambient and at >= beat * 6 and at < duration - beat * 4:
             t = np.arange(round(RATE * 0.16)) / RATE
             noise = np.random.default_rng(step + 400).standard_normal(len(t))
             if step % 2 == 0:
@@ -117,3 +138,29 @@ def launch_music(path: Path, duration: float):
     fade = np.minimum(t / 0.04, 1) * np.clip((duration - t) / 0.7, 0, 1)
     track *= fade[:, None]
     write_audio(path, track)
+
+
+def motion_schedule(scenes):
+    return [
+        {
+            "kind": hit["kind"],
+            "time": scene.get("timeline_start", 0) + hit["beat"] * 60 / direction["bpm"],
+            "pan": 0,
+        }
+        for scene in scenes
+        if (direction := scene.get("direction"))
+        for hit in direction["hits"]
+    ]
+
+
+def beat_map(scenes, duration):
+    bpm = next((s["direction"]["bpm"] for s in scenes if s.get("direction")), 150)
+    beats = [round(i * 60 / bpm, 6) for i in range(math.ceil(duration * bpm / 60))]
+    return {
+        "bpm": bpm,
+        "fps": 30,
+        "beats": beats,
+        "downbeats": beats[::4],
+        "hits": motion_schedule(scenes),
+        "interactions": interaction_schedule(scenes),
+    }

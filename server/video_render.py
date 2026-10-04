@@ -401,11 +401,13 @@ def render(
             total += lengths[i]
         ffmpeg("-f", "concat", "-safe", "0", "-i", str(manifest), "-c", "copy", str(joined))
     output = directory / "film.mp4"
-    from server.video_sound import interaction_audio, launch_music
+    from server.video_sound import beat_map, interaction_audio, launch_music
 
     effects = directory / "interactions.wav"
     cues = interaction_audio(effects, total + 0.1, scenes)
     (directory / "sound-cues.json").write_text(json.dumps(cues, indent=2))
+    beats = beat_map(scenes, total)
+    (directory / "beats.json").write_text(json.dumps(beats, indent=2))
     if music != "none" or cues:
         bed = directory / "music.wav"
         voiced = any(audio_paths)
@@ -413,8 +415,8 @@ def render(
             ffmpeg(
                 "-f", "lavfi", "-i", "anullsrc=r=24000:cl=stereo", "-t", str(total + 0.1), str(bed)
             )
-        elif not voiced and music == "momentum":
-            launch_music(bed, total + 0.1)
+        elif any(s.get("direction") for s in scenes) or (not voiced and music == "momentum"):
+            launch_music(bed, total + 0.1, beats["bpm"], ambient=music == "ambient")
         else:
             original_music(bed, total + 0.1, music)
             if designed:

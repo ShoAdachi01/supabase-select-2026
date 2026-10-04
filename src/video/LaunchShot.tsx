@@ -1,8 +1,9 @@
 import React from 'react';
 import { AbsoluteFill, Img, OffthreadVideo, useCurrentFrame, useVideoConfig } from 'remotion';
 import '@fontsource-variable/inter';
+import { DirectedShot, type ShotDirection } from './DirectedShot';
 
-export type MotionPreset = 'reveal' | 'panels' | 'detail' | 'resolve';
+export type MotionPreset = 'reveal' | 'panels' | 'detail' | 'resolve' | 'directed';
 export type ShotProps = {
   preset: MotionPreset;
   theme: 'paper' | 'midnight';
@@ -14,6 +15,7 @@ export type ShotProps = {
   frames: number;
   interactive?: boolean;
   focus?: { x: number; y: number };
+  direction?: ShotDirection;
 };
 
 const clamp = (n: number) => Math.min(1, Math.max(0, n));
@@ -101,6 +103,8 @@ export function LaunchShot(props: ShotProps) {
   const titleSize = Math.min(146, 680 / Math.sqrt(Math.max(1, props.headline.length)));
   const handoff = segment(t, 0.73, 1);
   const focus = props.focus || { x: 0.55, y: 0.5 };
+
+  if (props.preset === 'directed' && props.direction) return <DirectedShot {...props} />;
 
   if (props.preset === 'detail') {
     const move = segment(t, 0.04, 0.34);

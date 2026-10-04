@@ -171,7 +171,7 @@ export default function Studio() {
     password: '',
     login_url: '',
     credentials: false,
-    duration: 60,
+    duration: 30,
     format: 'launch' as 'launch' | 'walkthrough',
   });
   const videoElement = useRef<HTMLVideoElement>(null);
@@ -1607,7 +1607,7 @@ export default function Studio() {
                 <div className="prompt-example">
                   <Sparkles size={16} />
                   <p>
-                    Make a 60-second feature demo of my deployed app. Use the demo login, show how a
+                    Make a 30-second launch film of my deployed app. Use the demo login, show how a
                     user creates a project and views its board, narrate with Marin, and add quiet
                     ambient music. Return the MP4 when it’s ready.
                   </p>

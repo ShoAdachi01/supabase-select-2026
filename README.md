@@ -1,6 +1,6 @@
 # Cutroom
 
-**Your agent’s product video studio.** Give it a deployed app URL, a feature brief, and optional demo login credentials. Get an editable, narrated launch film: animated opening, real product footage, benefit spotlight, closing invitation, smooth transitions, and background music.
+**Your agent’s product video studio.** Give it a deployed app URL, a feature brief, and optional demo login credentials. Get an editable, narrated launch film: animated reveals, full-screen product footage, concise narration, clean cuts, and background music.
 
 The web app and authenticated MCP connector use the same jobs, voices, storyboard, and exports. This is a working hackathon prototype, not a billing-enabled production service.
 
@@ -42,13 +42,13 @@ Open **http://127.0.0.1:5173**. The browser creates an anonymous Supabase worksp
 2. Describe the feature and the outcome to show. Add an email/username, password, and optionally a separate login URL for a demo account.
 3. Choose a narrator, target duration, background music, and visual style.
 4. The director inspects visible controls and screenshots, selects bounded browser actions, and captures actual interactions. Login happens in an unrecorded browser; its session transfers to the recording context.
-5. The script is generated from captured scenes and visible app text. Speech is generated separately per scene, and the renderer aligns the film to each audio segment. Model thinking time is cut out.
+5. The script is generated from captured scenes and visible app text. Launch scripts use short benefit-focused lines. Routine navigation can be filmed as a ready destination; feature interactions retain their cursor movement. Model thinking time is cut out.
 6. Review the film and its storyboard. Choose a scene in **Script**, edit its spoken words, and use **Hear these words** to preview the actual narration. Cut/restore, duplicate, reorder, and trim captured scenes. Edit title headlines and supporting lines independently of the voiceover.
-7. Choose a smooth dissolve, clean cut, or dip to black for each scene. **Render changes** uses the existing capture and produces a 1080p, 30 fps MP4. Trims change the footage window; the final frame holds when narration is longer.
+7. Set each shot’s duration and choose a steady full-screen camera or gentle push toward the action. Choose a clean cut, dissolve, or dip to black. **Render changes** uses the existing capture and produces a 1080p, 30 fps MP4. Trims change the footage window. Long captures speed up to fit the shot; short captures hold their final frame. Longer edited narration extends the shot so speech is never cut off.
 
-The default **Launch film** format surrounds real captured scenes with three animated cards. **Product walkthrough** keeps only browser footage. In existing projects, **Add launch sequence** drafts opening, benefit, and closing copy from the verified captured scenes. Every line remains editable. Cuts are non-destructive: original captures remain intact, and a cut scene can be restored.
+The default **Launch film** targets 30 seconds, with 2–4-second shots, brief animated typography, full-screen product footage, and clean cuts. Opening and spotlight reveals expand the exact first frame of the following trimmed shot to fill the canvas. The redundant overview is cut but can be restored. Typography is silent by default, reserving narration for product footage. **Product walkthrough** keeps only browser footage. In existing projects, **Add launch sequence** drafts opening, benefit, and closing copy and shortens narration from the verified captured scenes. Every line remains editable. Cuts are non-destructive: original captures remain intact, and a cut scene can be restored.
 
-The renderer uses original synthesized instrumental beds, automatically mixed and ducked under speech. It does not require a music-generation API or external music assets. The target duration guides the narration; actual duration depends on generated speech and the number of captured scenes.
+The renderer uses original synthesized instrumental beds, automatically mixed and ducked under speech. It does not require a music-generation API or external music assets. The actual duration depends on shot budgets, generated speech, and the number of captured scenes. Edited long narration is preserved and can exceed the target; the editor flags likely overruns.
 
 The **sample app** is Meridian, a fictional project workspace bundled in `public/sample/`. With API keys it uses the real director and speech pipeline. Without reasoning keys, the sample uses a deterministic four-action path. On macOS without a speech key it uses the local system narrator; on other systems the unconfigured sample is silent. These fallbacks are labelled. They are not evidence of autonomous execution on an arbitrary app.
 
@@ -104,11 +104,11 @@ For a remote agent, replace localhost with the deployed server origin.
 
 Submit a job and poll `get_video` until complete, failed, or cancelled. Then call `export_video`. The prototype supports authenticated Streamable HTTP and has been checked with the official MCP SDK. Session tokens expire; this implementation does **not** include a public OAuth discovery/authorization flow for one-click connector installation.
 
-`render_video` accepts `clips` from the project's `payload.timeline`, including source references, enabled flags, order, trims, exact narration, title copy, and transitions. Legacy `narration` arrays remain supported for browser-only edits. `audio_source=generated` regenerates edited spoken words; `uploaded` uses an existing uploaded recording. Playback returns exported `timeline_start` values that account for transition overlaps, so storyboard seeking matches the actual film.
+`render_video` accepts `clips` from the project's `payload.timeline`, including source references, enabled flags, order, trims, shot duration, camera (`wide` or `push`), exact narration, title copy, and transitions. Legacy `narration` arrays remain supported for browser-only edits. `audio_source=generated` regenerates edited spoken words; `uploaded` uses an existing uploaded recording. Playback returns exported `timeline_start` values that account for transition overlaps, so storyboard seeking matches the actual film.
 
 Example prompt:
 
-> Create a 60-second feature demo of my deployed app. Use the demo login, show how a user opens a project and views its board, narrate with Marin, and add quiet ambient music. Return the MP4 when ready.
+> Create a 30-second launch film of my deployed app. Use the demo login, show how a user opens a project and views its board, narrate with Marin, and add quiet ambient music. Return the MP4 when ready.
 
 ## Structure
 
@@ -129,6 +129,8 @@ Prior Trace source and deterministic tests are retained for reference. `npm run 
 
 ## Validation
 
+The short-film integration produced a 22.8-second narrated 1080p sample through MCP, including capture, launch planning, camera controls, revision, and private export. Built-in animation required no video-generation API.
+
 ```sh
 npm run build          # TypeScript checks and production frontend build
 npm run lint           # Ruff and Prettier
@@ -138,6 +140,7 @@ npm run test:video:e2e # Full web flow, real capture, narration, render, private
 npm run test:login     # Basic login, session transfer, incorrect-credential rejection
 npm run test:public    # Public deployed test app → MCP → actual narrated MP4; requires provider keys
 npm run test:revision  # Run after test:video:e2e; edit narration/voice/style through MCP and export again
+npm run test:launch    # Run after test:video:e2e; MCP creates and exports a short narrated launch film
 npm run test:editing   # Run after test:video:e2e; real UI word edits, cuts, trims, launch animation and export
 ```
 
@@ -164,4 +167,4 @@ Before public launch, add a durable task queue, distributed capture/artifact sto
 
 Basic email/password logins are supported. MFA, CAPTCHA, email-first multi-step sign-in, and sessionStorage-only authentication may need an interactive login extension. Destructive actions, purchases, sending messages, and inviting people are excluded from the browser action set. The director is bounded to eight selected actions, so complex features need a focused brief.
 
-The exporter retains real recorded interactions and uses actual overlapping dissolves, gentle zooms, and composed framing. It does not generate imaginary product screens. Captions currently show one condensed block per scene, not word-level karaoke captions. The editor supports scene-level cuts and source trims, not arbitrary frame splitting or multi-track keyframe editing. No commercial-quality claim or arbitrary-site success rate is implied by the sample demo.
+The exporter retains real recorded interactions and uses full-screen framing, matched product reveals, gentle camera pushes, clean cuts, and optional dissolves. It does not generate imaginary product screens. Captions currently show one condensed block per scene, not word-level karaoke captions. The editor supports scene-level cuts and source trims, not arbitrary frame splitting or multi-track keyframe editing. No commercial-quality claim or arbitrary-site success rate is implied by the sample demo.

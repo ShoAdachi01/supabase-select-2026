@@ -22,7 +22,7 @@ class VideoInput(BaseModel):
     voice: str = Field(default="marin", max_length=100)
     music: Literal["ambient", "momentum", "none"] = "ambient"
     theme: Literal["midnight", "paper"] = "midnight"
-    duration: Literal[30, 60, 90] = 60
+    duration: Literal[30, 60, 90] = 30
     demo: bool = False
     format: Literal["launch", "walkthrough"] = "launch"
 
@@ -41,11 +41,12 @@ class TimelineClip(BaseModel):
     headline: str = Field(default="", max_length=180)
     subtitle: str = Field(default="", max_length=240)
     layout: Literal["hook", "benefit", "outro"] = "hook"
-    duration: float = Field(default=4, ge=2, le=15)
+    duration: float = Field(default=4, ge=1, le=15)
+    camera: Literal["wide", "push"] = "wide"
     trim_start: float = Field(default=0, ge=0)
     trim_end: float | None = Field(default=None, ge=0)
     enabled: bool = True
-    transition: Literal["cut", "fade", "dissolve"] = "dissolve"
+    transition: Literal["cut", "fade", "dissolve"] = "cut"
 
 
 class RenderInput(VideoId):

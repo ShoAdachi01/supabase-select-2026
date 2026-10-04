@@ -26,7 +26,7 @@ from server.video_models import (
 )
 from server.video_providers import capabilities, reason, setting, speech
 from server.video_render import ffmpeg, render
-from server.video_timeline import browser_clips, compile_timeline, launch_clips
+from server.video_timeline import browser_clips, compile_timeline, launch_clips, launch_prompt
 
 ROOT = Path(__file__).resolve().parent.parent
 VIDEO_DIR = Path(os.getenv("CUTROOM_DATA_DIR", ".cutroom")).resolve()
@@ -194,10 +194,12 @@ def choose_action(observation: dict, body: VideoInput, history: list[dict]) -> d
     prompt = (
         f"Feature brief: {body.brief}\nTarget length: {body.duration}s. "
         f"Completed actions: {json.dumps(history)}\nVisible app: {json.dumps(view)}\n"
-        "Choose ONE next action to demonstrate the feature. Aim for 3–6 meaningful scenes, "
+        "Choose ONE next action to demonstrate the feature. Aim for 3–5 meaningful scenes, "
         "avoid repeated clicks. Use only visible element IDs. JSON shape: "
         '{"type":"click|fill|select|scroll|press|hold|done","id":0,"value":"",'
-        '"amount":400,"key":"Enter","label":"Short scene title"}. '
+        '"amount":400,"key":"Enter","label":"Short scene title","shot":"action|result"}. '
+        "Use shot=result for navigating between pages/tabs: the destination is filmed after navigation. "
+        "Use shot=action when the actual interaction proves the feature (typing, selecting, changing a view). "
         "done means the requested feature has been visibly demonstrated. "
         'If the feature cannot be found, return {"type":"done","unavailable":true,"reason":"explanation"}.'
     )
@@ -305,12 +307,18 @@ def film(store: Store, job: dict, body: VideoInput):
             result = {}
             if body.demo and not capabilities()["reasoning"]:
                 scripts = [
-                    "Meet Meridian. A calmer place to bring your team's work together, from the first idea to the final delivery.",
-                    "Keep every project in one place. See ownership, progress, and the next milestone without chasing an update.",
-                    "Open a project to find the details that matter. Tasks, deadlines, and your team are right where you need them.",
-                    "Switch to the board to follow work as it moves forward. Every task has a clear place and a clear next step.",
-                    "And when you need the bigger picture, analytics brings your team's progress into focus. Less guesswork. More momentum.",
+                    "Meet Meridian. Bring your team's work together.",
+                    "Every project. One clear view.",
+                    "Tasks, deadlines, and ownership. All together.",
+                    "See what is next. Keep work moving.",
+                    "Your team's progress, in focus.",
                 ]
+            elif body.format == "launch":
+                result = reason(
+                    launch_prompt(body.title, body.brief, scenes)
+                    + f" Screen evidence: {json.dumps(views)}"
+                )
+                scripts = result.get("narration", [])
             else:
                 result = reason(
                     f"Write a concise feature demo voiceover for {body.title}. Brief: {body.brief}. "
@@ -321,17 +329,17 @@ def film(store: Store, job: dict, body: VideoInput):
                     "Explain benefits supported by the screen. No invented metrics, no pricing claims, no credentials."
                 )
                 scripts = result.get("narration", [])
-                if len(scripts) != len(scenes) or any(
-                    not isinstance(t, str) or not 1 <= len(t) <= 1000 for t in scripts
-                ):
-                    raise ValueError(
-                        "The script did not match the captured scenes. Start another take."
-                    )
+            if len(scripts) != len(scenes) or any(
+                not isinstance(t, str) or not 1 <= len(t) <= 1000 for t in scripts
+            ):
+                raise ValueError(
+                    "The script did not match the captured scenes. Start another take."
+                )
             for scene, script in zip(scenes, scripts, strict=True):
                 scene["narration"] = script
             job["payload"]["scenes"] = scenes
             job["payload"]["timeline"] = (
-                launch_clips(scenes, body.title, result.get("launch"))
+                launch_clips(scenes, body.title, result, body.duration)
                 if body.format == "launch"
                 else browser_clips(scenes)
             )

@@ -48,7 +48,7 @@ from server.video_service import (
     resolve_voice,
     voices,
 )
-from server.video_timeline import launch_clips
+from server.video_timeline import launch_clips, launch_prompt
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGNING_KEY = setting("CUTROOM_SIGNING_KEY", secrets.token_hex(32)).encode()
@@ -300,9 +300,7 @@ def launch_plan(video_id: uuid.UUID, store: Store = Depends(workspace)):
     plan = None
     if capabilities()["reasoning"]:
         try:
-            plan = reason(
-                f"Create opening hook, one benefit card, and closing invitation for a launch film. Product: {job['title']}. Brief: {job['payload']['brief']}. Verified captured scenes: {json.dumps(scenes)}. Return JSON keys hook, benefit, outro; each has headline (2–7 words), subtitle (one short sentence), narration (6–10 words). Only claim benefits visible in the captured scenes. No invented stats, prices or testimonials."
-            )
+            plan = reason(launch_prompt(job["title"], job["payload"]["brief"], scenes))
         except (ValueError, httpx.HTTPError):
             raise HTTPException(
                 503, "Launch copy could not be planned. Add an animated title manually."
@@ -313,7 +311,7 @@ def launch_plan(video_id: uuid.UUID, store: Store = Depends(workspace)):
 TOOLS = [
     (
         "create_product_video",
-        "Create a product film from a deployed URL, feature brief, optional demo credentials, voice, and style. Credentials are transient. Returns a video ID; poll get_video. Use a demo account. demo=true films our sample app only.",
+        "Create a launch film from a deployed URL and feature brief: full-screen product footage, short narration, animated reveals, clean cuts and music. Defaults to a 30-second target. Optional demo credentials are transient. Returns a video ID; poll get_video. demo=true films our sample app only.",
         VideoInput,
     ),
     (
@@ -336,7 +334,7 @@ TOOLS = [
     ("cancel_video", "Stop a video job at its next stage boundary.", VideoId),
     (
         "plan_launch_video",
-        "Plan editable animated hook, benefit and closing scenes grounded in the captured product. Returns a timeline draft; submit it to render_video.",
+        "Re-cut captured footage into a short launch film: concise narration, timed full-screen shots, animated reveals and closing. Returns an editable timeline draft; submit it to render_video. No video-generation provider required.",
         VideoId,
     ),
     (

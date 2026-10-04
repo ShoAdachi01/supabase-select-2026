@@ -27,14 +27,54 @@ def browser_clips(scenes: list[dict]) -> list[dict]:
     ]
 
 
-def launch_clips(scenes: list[dict], title: str, plan: dict | None = None) -> list[dict]:
+def launch_prompt(title: str, brief: str, scenes: list[dict]) -> str:
+    import json
+
+    return (
+        f"Direct a punchy 20–30 second launch film for {title}. Brief: {brief}. "
+        f"Verified captured scenes: {json.dumps(scenes)}. "
+        'Return {"narration":["6–9 spoken words per captured scene"], '
+        '"hook":{"headline":"2–5 words","subtitle":""},'
+        '"benefit":{"headline":"2–5 words","subtitle":""},'
+        '"outro":{"headline":"2–5 words","subtitle":""}}. '
+        f"Exactly {len(scenes)} narration entries in capture order, maximum 9 words each. "
+        "Each line expresses one visible benefit. No step-by-step navigation instructions. "
+        "The typography cards are silent, so do not add narration to hook, benefit or outro. "
+        "Only claim benefits visible in the captured scenes; no invented stats, prices or testimonials."
+    )
+
+
+def launch_clips(
+    scenes: list[dict], title: str, plan: dict | None = None, target_duration: int = 30
+) -> list[dict]:
     plan = plan if isinstance(plan, dict) else {}
     originals = browser_clips(scenes)
+    # Keep source clips recoverable, but do not repeat an establishing screen before the feature.
+    for clip, source in zip(originals, scenes, strict=True):
+        clip["enabled"] = not (len(scenes) > 1 and source.get("action") == "overview")
+        clip["camera"] = "push" if source.get("shot") == "result" else "wide"
+    scripts = plan.get("narration", [])
+    if isinstance(scripts, list) and len(scripts) == len(originals):
+        for clip, script in zip(originals, scripts, strict=True):
+            if isinstance(script, str):
+                clip["narration"] = script[:1000]
+    shot_duration = (
+        round(
+            min(
+                4,
+                max(2.4, (target_duration - 6.8) / max(1, sum(c["enabled"] for c in originals))),
+            )
+            / 0.4
+        )
+        * 0.4
+    )
+    for clip in originals:
+        clip["duration"] = round(shot_duration, 1)
     cards = []
     for layout, headline, narration in (
-        ("hook", title, f"Introducing {title}."),
-        ("benefit", scenes[min(1, len(scenes) - 1)]["label"], "See how it works."),
-        ("outro", "See it in action.", "Explore the product for yourself."),
+        ("hook", title, ""),
+        ("benefit", scenes[min(1, len(scenes) - 1)]["label"], ""),
+        ("outro", "See it in action.", ""),
     ):
         copy = plan.get(layout, {})
         if not isinstance(copy, dict):
@@ -52,10 +92,11 @@ def launch_clips(scenes: list[dict], title: str, plan: dict | None = None) -> li
                 headline=str(copy.get("headline") or headline)[:180],
                 subtitle=str(copy.get("subtitle") or "")[:240],
                 narration=str(copy.get("narration") or narration)[:1000],
-                duration=4,
+                duration={"hook": 2.4, "benefit": 2, "outro": 2.4}[layout],
             ).model_dump(mode="json")
         )
-    midpoint = min(2, len(originals))
+    visible = [i for i, clip in enumerate(originals) if clip["enabled"]]
+    midpoint = visible[min(1, len(visible) - 1)] + 1 if visible else len(originals)
     return [cards[0], *originals[:midpoint], cards[1], *originals[midpoint:], cards[2]]
 
 
@@ -74,7 +115,9 @@ def compile_timeline(job: dict, clips: list[TimelineClip]) -> list[dict]:
             source = sources.get(clip.scene_id)
             if not source:
                 raise HTTPException(400, "Choose a captured scene from this video.")
-            if source.get("thumbnail") and not re.fullmatch(r"scene-\d{1,2}\.jpg", source["thumbnail"]):
+            if source.get("thumbnail") and not re.fullmatch(
+                r"scene-\d{1,2}\.jpg", source["thumbnail"]
+            ):
                 raise HTTPException(400, "Invalid captured thumbnail.")
             available = source["end"] - source["start"]
             end = clip.trim_end if clip.trim_end is not None else available

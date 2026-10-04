@@ -20,7 +20,8 @@
     "test:editing": "node scripts/verify_video_editing.mjs",
     "test:mcp": "node scripts/verify_video_mcp.mjs",
     "lint": ".venv/bin/ruff check server scripts tests && prettier --check src tests/browser scripts/*.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json",
-    "format": ".venv/bin/ruff format server scripts tests && prettier --write src tests/browser scripts/*.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json"
+    "format": ".venv/bin/ruff format server scripts tests && prettier --write src tests/browser scripts/*.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json",
+    "test:launch": "node scripts/verify_video_launch.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.0",

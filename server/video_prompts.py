@@ -1,6 +1,6 @@
 """Versioned production briefs. Strategies vary planning, never mandate a shot sequence."""
 
-PROMPT_VERSION = "motion-brief-v6"
+PROMPT_VERSION = "motion-brief-v7"
 STRATEGIES = ("baseline", "detailed", "storyboard", "studies")
 
 CRAFT = """

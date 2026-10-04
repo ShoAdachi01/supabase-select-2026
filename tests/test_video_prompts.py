@@ -331,3 +331,34 @@ def test_repeated_incomplete_output_stops_and_retains_known_usage(monkeypatch):
         providers.reason("Compose", motion=True, telemetry=telemetry)
     assert len(calls) == 2
     assert len(telemetry["usage_attempts"]) == 2
+
+
+def test_raw_source_evidence_is_cached_and_invalidated_with_capture(tmp_path, monkeypatch):
+    (tmp_path / "raw.webm").write_bytes(b"capture-one")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        Image.new("RGB", (320, 180), "blue").save(command[-1])
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(director.subprocess, "run", run)
+    first = director.source_frames(tmp_path, sources())
+    assert len(first) == 4
+    assert "RAW scene-0.jpg START" in first[0][1]
+    assert director.source_frames(tmp_path, sources()) == first
+    assert len(calls) == 4
+    (tmp_path / "raw.webm").write_bytes(b"different-capture")
+    director.source_frames(tmp_path, sources())
+    assert len(calls) == 8
+
+
+def test_failed_source_decode_cannot_reuse_a_stale_frame(tmp_path, monkeypatch):
+    (tmp_path / "raw.webm").write_bytes(b"capture")
+    Image.new("RGB", (10, 10), "blue").save(tmp_path / "source-0-start.jpg")
+    monkeypatch.setattr(
+        director.subprocess, "run", lambda *a, **kw: type("Result", (), {"returncode": 0})()
+    )
+    with pytest.raises(ValueError, match="source frames"):
+        director.source_frames(tmp_path, sources())
+    assert not (tmp_path / "source-0-start.jpg").exists()

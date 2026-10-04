@@ -7,8 +7,10 @@ import io
 import json
 import math
 import re
+import subprocess
 from pathlib import Path
 
+import imageio_ffmpeg
 from PIL import Image, ImageDraw
 
 from server.video_direction_models import FilmDirection, FilmTreatment
@@ -57,7 +59,8 @@ def contact_sheet(folder: Path, items: list[tuple[str, str]], output: str) -> st
     draw = ImageDraw.Draw(canvas)
     for i, (name, label) in enumerate(items):
         if not re.fullmatch(
-            r"(?:(?:scene-\d{1,2}|preview-\d{1,2}-\d+)\.jpg|detail-\d{1,2}-\d\.png)", name
+            r"(?:(?:scene-\d{1,2}|preview-\d{1,2}-\d+|source-\d{1,2}-(?:start|end))\.jpg|detail-\d{1,2}-\d\.png)",
+            name,
         ):
             raise ValueError("Invalid director evidence asset.")
         with Image.open(folder / name) as source:
@@ -70,6 +73,55 @@ def contact_sheet(folder: Path, items: list[tuple[str, str]], output: str) -> st
     buffer = io.BytesIO()
     canvas.save(buffer, "JPEG", quality=85)
     return base64.b64encode(buffer.getvalue()).decode()
+
+
+def source_frames(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
+    """Show native UI changes so the director/critic doesn't mistake them for camera motion."""
+    raw = folder / "raw.webm"
+    if not raw.exists():
+        return []
+    result = []
+    for index, scene in enumerate(scenes[:8]):
+        start, end = float(scene["start"]), float(scene["end"])
+        for label, time in (("start", start + 1 / 30), ("end", max(start, end - 1 / 30))):
+            name = f"source-{index}-{label}.jpg"
+            target = folder / name
+            stamp = folder / f"source-{index}-{label}.json"
+            identity = {
+                "time": time,
+                "raw_bytes": raw.stat().st_size,
+                "raw_mtime": raw.stat().st_mtime_ns,
+            }
+            if (
+                not target.exists()
+                or not stamp.exists()
+                or json.loads(stamp.read_text()) != identity
+            ):
+                target.unlink(missing_ok=True)
+                completed = subprocess.run(
+                    [
+                        imageio_ffmpeg.get_ffmpeg_exe(),
+                        "-v",
+                        "error",
+                        "-y",
+                        "-ss",
+                        str(time),
+                        "-i",
+                        str(raw),
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "scale=960:540:force_original_aspect_ratio=decrease",
+                        str(target),
+                    ],
+                    capture_output=True,
+                    timeout=20,
+                )
+                if completed.returncode or not target.exists():
+                    raise ValueError("Could not inspect the recorded source frames.")
+                stamp.write_text(json.dumps(identity))
+            result.append((name, f"RAW {scene['thumbnail']} {label.upper()} (native UI)"))
+    return result
 
 
 def evidence_scenes(scenes: list[dict]) -> list[dict]:
@@ -389,6 +441,7 @@ def direct_film(
             (name, f"{source['thumbnail']} / detail-{i}")
             for i, name in enumerate(source.get("details", [])[:3])
         )
+    assets.extend(source_frames(folder, sources))
     image = contact_sheet(folder, assets, "director-evidence.jpg")
     schema = json.dumps(FilmDirection.model_json_schema())
     prompt = (
@@ -426,7 +479,8 @@ def direct_film(
         "Return the full film as JSON matching this schema. Keep concept to one sentence and grammar to three short sentences. Layer states use normalized x/y/w/h, pixel radius, local beat. "
         "The easing on a destination state controls movement toward that state. Omitted geometry inherits the preceding state. To hold, repeat geometry at a later beat before the next movement. Order layers back-to-front. "
         "Text uses size in pixels. Product is the settled screenshot; footage is the actual interaction. "
-        "Do not cover footage with an opaque product screenshot.\n" + schema
+        "Do not cover footage with an opaque product screenshot. RAW START/END frames show the native recording progression; they are evidence only, not additional render assets. Account for native full-screen previews or navigation when planning the story.\n"
+        + schema
     )
     prompt = enriched_prompt(prompt, strategy, reference_analysis)
     treatment = prepared_treatment
@@ -572,12 +626,14 @@ def review_film(
                     )
                 )
             offset += job["frames"] / 30
+        items.extend(source_frames(folder, evidence_scenes(scenes)))
         image = contact_sheet(folder, items, f"director-review-{attempt}.jpg")
         prompt = (
             "Critique these actual rendered frames in chronological order, including shot boundaries. "
             'Return JSON {"findings":[{"shot":0,"time":0.5,"problem":"specific visible defect"}]}. '
             "Focus on OUR composited text, graphics and camera choices, NOT the customer's original UI styling. "
             "Never ask to recolor product pixels or enlarge every native UI label. Inspect added text especially: white on white is a defect. "
+            "RAW START/END frames show changes inside the original recording. Native navigation or a full-screen preview is not a compositor camera error; never request restoring UI that is absent from the source frame. Revise added geometry/copy or choose an available still, while retaining the recorded action. "
             "Typing and masks intentionally reveal partial words during entrances. Report clipping only if settled text remains cropped; a brief graphic anticipation is not automatically an empty hold. "
             "Live footage includes the cursor action before the destination appears; do not call a short action lead-in a duplicated shot. "
             "Check clipping, type readability and contrast, obscured interactions, repeated compositions, "

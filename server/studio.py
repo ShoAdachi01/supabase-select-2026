@@ -308,6 +308,7 @@ def launch_plan(video_id: uuid.UUID, store: Store = Depends(workspace)):
             directory(store, str(video_id)),
             job["payload"].get("duration", 30),
             job["payload"].get("creative_direction", ""),
+            reference_urls=job["payload"].get("reference_urls", []),
         )
         return {"clips": compile_direction(direction, scenes)}
     return {
@@ -318,7 +319,7 @@ def launch_plan(video_id: uuid.UUID, store: Store = Depends(workspace)):
 TOOLS = [
     (
         "create_product_video",
-        "Create a launch film from a deployed URL and feature brief. The director chooses a film-specific concept, motion grammar, compositions and beat grid, then reviews rendered previews with up to two revisions. Optional creative_direction describes pacing, typography, references or visual personality. Defaults to voice=none: music with synchronized real interaction sounds. Select a stock or custom voice for narration. Defaults to a 30-second maximum target. Demo credentials are transient. Returns a video ID; poll get_video. demo=true films our sample app only.",
+        "Create a launch film from a deployed URL and feature brief. The director chooses a film-specific concept, motion grammar, compositions and beat grid, then reviews rendered previews with up to two revisions. Optional creative_direction describes pacing, typography or visual personality. reference_urls accepts up to three public video, image, or embedded-media page references; accessible media is sampled and analyzed, and unavailable media is reported. Defaults to voice=none: music with synchronized real interaction sounds. Select a stock or custom voice for narration. Defaults to a 30-second maximum target. Demo credentials are transient. Returns a video ID; poll get_video. demo=true films our sample app only.",
         VideoInput,
     ),
     (

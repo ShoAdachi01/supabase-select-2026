@@ -61,7 +61,15 @@ def reasoning_request(url: str, *, motion: bool, **kwargs) -> httpx.Response:
 
 
 def reason(
-    prompt: str, screenshot: str | None = None, *, max_tokens: int = 1800, motion: bool = False
+    prompt: str,
+    screenshot: str | None = None,
+    *,
+    max_tokens: int = 1800,
+    motion: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+    telemetry: dict | None = None,
 ) -> dict:
     system = (
         "You direct an authentic SaaS feature demonstration. Respond with one JSON object. "
@@ -69,12 +77,33 @@ def reason(
         "Do not purchase, delete, invite real people, send communications, or change account settings. "
         "Never invent product capabilities or business claims. Never repeat credentials."
     )
-    use_claude = bool(setting("ANTHROPIC_API_KEY")) and (
-        setting("CUTROOM_DIRECTOR") == "claude"
-        or bool(setting("ANTHROPIC_WORKSPACE_ID"))
-        or not setting("OPENAI_API_KEY")
+    if provider not in (None, "openai", "claude"):
+        raise ValueError("Unknown reasoning provider")
+    use_claude = provider == "claude" or (
+        provider is None
+        and bool(setting("ANTHROPIC_API_KEY"))
+        and (
+            setting("CUTROOM_DIRECTOR") == "claude"
+            or bool(setting("ANTHROPIC_WORKSPACE_ID"))
+            or not setting("OPENAI_API_KEY")
+        )
     )
+    selected_model = model or (
+        setting("ANTHROPIC_MOTION_MODEL", setting("ANTHROPIC_MODEL", "claude-sonnet-4-5"))
+        if use_claude and motion
+        else setting("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+        if use_claude
+        else setting("CUTROOM_MOTION_MODEL", "gpt-5.4")
+        if motion
+        else setting("OPENAI_MODEL", "gpt-4.1-mini")
+    )
+    selected_effort = effort or setting("CUTROOM_MOTION_EFFORT", "high")
+    if selected_effort not in ("low", "medium", "high"):
+        raise ValueError("Motion effort must be low, medium, or high")
+    started = time.monotonic()
     if use_claude:
+        if not setting("ANTHROPIC_API_KEY"):
+            raise ProviderError("Configure ANTHROPIC_API_KEY for the selected director.")
         content = [{"type": "text", "text": prompt}]
         if screenshot:
             content.append(
@@ -101,12 +130,20 @@ def reason(
                     ),
                 },
                 json={
-                    "model": setting("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
-                    "max_tokens": max_tokens,
+                    "model": selected_model,
+                    "max_tokens": max_tokens + (8000 if motion else 0),
+                    **(
+                        {"output_config": {"effort": selected_effort}}
+                        if motion
+                        and selected_model.startswith(
+                            ("claude-opus-5", "claude-fable-5", "claude-sonnet-5")
+                        )
+                        else {}
+                    ),
                     "system": system,
                     "messages": [{"role": "user", "content": content}],
                 },
-                timeout=90,
+                timeout=240 if motion else 90,
             ),
             "Claude",
         )
@@ -125,19 +162,17 @@ def reason(
                 motion=motion,
                 headers={"Authorization": f"Bearer {setting('OPENAI_API_KEY')}"},
                 json={
-                    "model": setting("CUTROOM_MOTION_MODEL", "gpt-5.4")
-                    if motion
-                    else setting("OPENAI_MODEL", "gpt-4.1-mini"),
+                    "model": selected_model,
                     **(
-                        {"reasoning": {"effort": "low"}}
-                        if motion and setting("CUTROOM_MOTION_MODEL", "gpt-5.4").startswith("gpt-5")
+                        {"reasoning": {"effort": selected_effort}}
+                        if motion and selected_model.startswith(("gpt-5", "gpt-6"))
                         else {}
                     ),
                     "instructions": system,
                     "input": [{"role": "user", "content": content}],
                     "store": False,
                     "text": {"format": {"type": "json_object"}},
-                    "max_output_tokens": max_tokens + (4000 if motion else 0),
+                    "max_output_tokens": max_tokens + (8000 if motion else 0),
                 },
                 timeout=240 if motion else 90,
             ),
@@ -148,6 +183,14 @@ def reason(
             for block in response.json().get("output", [])
             for c in block.get("content", [])
             if c.get("type") == "output_text"
+        )
+    if telemetry is not None:
+        telemetry.update(
+            provider="claude" if use_claude else "openai",
+            model=selected_model,
+            effort=selected_effort if motion else None,
+            seconds=round(time.monotonic() - started, 2),
+            usage=response.json().get("usage", {}),
         )
     result = result.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     value = json.loads(result)

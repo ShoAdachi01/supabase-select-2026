@@ -96,3 +96,29 @@ class FilmDirection(Contract):
     grammar: str = Field(min_length=12, max_length=2000)
     reference: Literal["editorial", "tactile", "precision"]
     shots: list[DirectedShot] = Field(min_length=2, max_length=10)
+
+
+class FilmConcept(Contract):
+    name: str = Field(min_length=1, max_length=100)
+    device: str = Field(min_length=8, max_length=1000)
+    why: str = Field(min_length=8, max_length=600)
+
+
+class FilmTreatment(Contract):
+    audience: str = Field(max_length=600)
+    promise: str = Field(max_length=600)
+    evidence: list[dict[str, str]] = Field(min_length=1, max_length=8)
+    concepts: list[FilmConcept] = Field(min_length=3, max_length=3)
+    chosen_concept: str = Field(max_length=100)
+    palette: list[str] = Field(min_length=1, max_length=6)
+    typography: str = Field(max_length=1200)
+    rhythm: str = Field(max_length=1200)
+    shots: list[dict] = Field(min_length=2, max_length=10)
+    avoid: list[str] = Field(max_length=8)
+    reference_translation: str = Field(max_length=1600)
+
+    @model_validator(mode="after")
+    def selected(self):
+        if self.chosen_concept not in {c.name for c in self.concepts}:
+            raise ValueError("Choose one of the three proposed concepts")
+        return self

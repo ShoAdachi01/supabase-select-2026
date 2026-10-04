@@ -31,11 +31,32 @@ class VideoInput(BaseModel):
     duration: Literal[30, 60, 90] = 30
     demo: bool = False
     format: Literal["launch", "walkthrough"] = "launch"
+    reference_urls: list[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description="Optional public reference video/image/page URLs. Accessible media is analyzed for visual grammar; unavailable references are reported.",
+    )
     creative_direction: str = Field(
         default="",
         max_length=2000,
         description="Optional art direction or reference grammar: pacing, typography, motion, and sound. The director chooses a film-specific structure.",
     )
+
+    @model_validator(mode="after")
+    def reference_links(self):
+        from urllib.parse import urlsplit
+
+        for url in self.reference_urls:
+            parts = urlsplit(url)
+            if (
+                len(url) > 2000
+                or parts.scheme not in ("http", "https")
+                or not parts.hostname
+                or parts.username
+                or parts.password
+            ):
+                raise ValueError("References must be public HTTP(S) URLs without credentials")
+        return self
 
 
 class VideoId(BaseModel):

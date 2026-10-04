@@ -47,6 +47,8 @@ export type Video = {
     url: string;
     host: string;
     brief: string;
+    creative_direction?: string;
+    reference_urls?: string[];
     voice: string;
     music: 'ambient' | 'momentum' | 'none';
     theme: 'midnight' | 'paper';

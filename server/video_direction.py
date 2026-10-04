@@ -11,9 +11,10 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from server.video_direction_models import FilmDirection
+from server.video_direction_models import FilmDirection, FilmTreatment
 from server.video_models import TimelineClip
-from server.video_providers import ProviderError, reason
+from server.video_prompts import PROMPT_VERSION, TREATMENT, enriched_prompt
+from server.video_providers import ProviderError, reason, setting
 
 # Distilled motion grammar, not reusable shot sequences or customer-facing presets.
 REFERENCES = {
@@ -316,7 +317,18 @@ def direct_film(
     target: int = 30,
     creative_direction: str = "",
     evidence=None,
+    *,
+    strategy: str | None = None,
+    reasoner=None,
+    reference_urls: list[str] | None = None,
+    reference_analysis: dict | None = None,
 ) -> FilmDirection:
+    reasoner = reasoner or reason
+    strategy = strategy or setting("CUTROOM_PROMPT_STRATEGY", "storyboard")
+    if reference_urls:
+        from server.video_reference import analyze_references
+
+        reference_analysis = analyze_references(reference_urls, folder, reasoner)
     sources = evidence_scenes(scenes)
     if not sources:
         raise ValueError("Capture a feature before directing its film.")
@@ -338,12 +350,54 @@ def direct_film(
         "Text uses size in pixels. Product is the settled screenshot; footage is the actual interaction. "
         "Do not cover footage with an opaque product screenshot.\n" + schema
     )
+    prompt = enriched_prompt(prompt, strategy, reference_analysis)
+    treatment = None
+    if strategy == "storyboard":
+        treatment_prompt = (
+            prompt.split("Return the full film as JSON")[0]
+            + "\n"
+            + enriched_prompt(TREATMENT, strategy, reference_analysis)
+        )
+        (folder / "treatment-prompt.txt").write_text(treatment_prompt)
+        treatment_errors = []
+        for _attempt in range(2):
+            proposed = reasoner(
+                treatment_prompt + "\nValidation feedback: " + json.dumps(treatment_errors),
+                image,
+                max_tokens=4000,
+                motion=True,
+            )
+            try:
+                treatment = FilmTreatment.model_validate(proposed)
+                break
+            except ValueError as exc:
+                treatment_errors = [str(exc)[:2000]]
+        if treatment is None:
+            raise ValueError("The director could not produce a usable treatment.")
+        (folder / "director-treatment.json").write_text(treatment.model_dump_json(indent=2))
+        prompt += (
+            "\nImplement this chosen treatment, adapting only where render constraints require it:\n"
+            + treatment.model_dump_json()
+        )
+    (folder / "director-run.json").write_text(
+        json.dumps(
+            {
+                "prompt_version": PROMPT_VERSION,
+                "strategy": strategy,
+                "reference_analysis": reference_analysis,
+            },
+            indent=2,
+        )
+    )
+    original_prompt = prompt
     errors = []
     previous = ""
     for attempt in range(3):
         try:
-            proposed = reason(
-                prompt + "\nFix these validation findings: " + json.dumps(errors),
+            request_prompt = prompt + "\nFix these validation findings: " + json.dumps(errors)
+            (folder / f"director-prompt-{attempt}.txt").write_text(request_prompt)
+            proposed = reasoner(
+                request_prompt,
                 image,
                 max_tokens=10000,
                 motion=True,
@@ -362,7 +416,7 @@ def direct_film(
             errors = [str(exc)[:3000]]
         if previous:
             prompt = (
-                RULES
+                original_prompt
                 + "\nRepair this exact film and return the full JSON with the same schema. "
                 + previous
             )
@@ -375,7 +429,14 @@ def direct_film(
 
 
 def review_film(
-    plan: FilmDirection, scenes: list[dict], folder: Path, theme: str, target: int, checkpoint=None
+    plan: FilmDirection,
+    scenes: list[dict],
+    folder: Path,
+    theme: str,
+    target: int,
+    checkpoint=None,
+    *,
+    reasoner=None,
 ) -> tuple[FilmDirection, dict]:
     """Inspect rendered state sequences, with at most two targeted revision attempts.
 
@@ -385,6 +446,12 @@ def review_film(
     from server.video_composition import prepare_compositions
     from server.video_timeline import compile_timeline
 
+    reasoner = reasoner or reason
+    creative_context = ""
+    if (folder / "director-treatment.json").exists():
+        creative_context = (
+            "\nPreserve the approved treatment: " + (folder / "director-treatment.json").read_text()
+        )
     report = {"status": "needs_review", "passes": [], "revision_count": 0}
     for attempt in range(3):
         if checkpoint:
@@ -436,7 +503,7 @@ def review_film(
             f"Film plan: {plan.model_dump_json()}"
         )
         try:
-            result = reason(prompt, image, max_tokens=1600, motion=True)
+            result = reasoner(prompt + creative_context, image, max_tokens=1600, motion=True)
             findings = result.get("findings")
             if not isinstance(findings, list) or any(
                 not isinstance(f, dict) or not isinstance(f.get("problem"), str) for f in findings
@@ -463,8 +530,9 @@ def review_film(
             checkpoint()
         try:
             revised = FilmDirection.model_validate(
-                reason(
-                    RULES
+                reasoner(
+                    enriched_prompt(RULES, "detailed")
+                    + creative_context
                     + "\nRepair the specific rendered defects below. Keep the concept and unaffected shots. "
                     "Return the complete revised film, using exactly the same JSON schema and only existing assets.\n"
                     f"Maximum duration: {target}s. Prior revision rejections: {json.dumps([p.get('rejected_revision') for p in report['passes']])}\nFindings: {json.dumps(findings[:12])}\nExisting film: {plan.model_dump_json()}\nSchema: {json.dumps(FilmDirection.model_json_schema())}",

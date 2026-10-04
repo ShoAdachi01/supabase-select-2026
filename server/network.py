@@ -55,6 +55,6 @@ def fetch_public(url: str, max_bytes: int = MAX_BYTES) -> tuple[bytes, str, str]
                 for chunk in response.iter_bytes():
                     content.extend(chunk)
                     if len(content) > max_bytes:
-                        raise ValueError("Source exceeds the 5 MB fetch limit.")
+                        raise ValueError(f"Source exceeds the {max_bytes // (1024 * 1024)} MB fetch limit.")
                 return bytes(content), response.headers.get("content-type", ""), url
     raise ValueError("Too many redirects.")

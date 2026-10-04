@@ -421,6 +421,7 @@ def film(store: Store, job: dict, body: VideoInput):
                     body.duration,
                     body.creative_direction,
                     views,
+                    reference_urls=body.reference_urls,
                 )
                 event(
                     store,
@@ -429,6 +430,34 @@ def film(store: Store, job: dict, body: VideoInput):
                     "Rendering preview states and checking composition, continuity, and readability.",
                     65,
                 )
+                reference_report = folder / "reference-analysis.json"
+                if reference_report.exists():
+                    job["payload"]["reference_analysis"] = json.loads(reference_report.read_text())
+                    for reference in job["payload"]["reference_analysis"]["references"]:
+                        if reference["status"] == "analyzed":
+                            detail = (
+                                "sampled video frames"
+                                if reference["kind"] == "video"
+                                else "a still image only; motion and sound were not observed"
+                            )
+                            event(
+                                store,
+                                job,
+                                "scripting",
+                                f"Reference {reference['index'] + 1}: studied {detail}.",
+                                64,
+                            )
+                    if any(
+                        r["status"] == "unavailable"
+                        for r in job["payload"]["reference_analysis"]["references"]
+                    ):
+                        event(
+                            store,
+                            job,
+                            "scripting",
+                            "Some reference media could not be accessed. Using your feature brief and available references.",
+                            64,
+                        )
                 direction, review = review_film(
                     direction,
                     scenes,

@@ -160,7 +160,9 @@ def test_director_repairs_invalid_plan_and_receives_screens(tmp_path, monkeypatc
     monkeypatch.setattr(
         director, "reason", lambda *args, **kwargs: calls.append(args) or next(answers)
     )
-    result = director.direct_film("Product", "Show both features", sources(), tmp_path)
+    result = director.direct_film(
+        "Product", "Show both features", sources(), tmp_path, strategy="baseline"
+    )
     assert result == film()
     assert calls[0][1].startswith("/9j/")
     assert "unknown capture" in calls[1][0]
@@ -252,8 +254,8 @@ def test_motion_model_configuration_is_separate_from_browser_selection(monkeypat
     assert calls[0]["model"] == "gpt-4.1-mini"
     assert "reasoning" not in calls[0]
     assert calls[1]["model"] == "gpt-5.4"
-    assert calls[1]["reasoning"] == {"effort": "low"}
-    assert calls[1]["max_output_tokens"] == 14000
+    assert calls[1]["reasoning"] == {"effort": "high"}
+    assert calls[1]["max_output_tokens"] == 18000
     assert calls[1]["store"] is False
 
 
@@ -270,7 +272,7 @@ def test_provider_access_error_is_not_retried_as_bad_art_direction(tmp_path, mon
 
     monkeypatch.setattr(director, "reason", fail)
     with pytest.raises(ProviderError):
-        director.direct_film("Product", "Show features", sources(), tmp_path)
+        director.direct_film("Product", "Show features", sources(), tmp_path, strategy="baseline")
     assert len(calls) == 1
 
 

@@ -22,7 +22,7 @@ const transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
 try {
   await client.connect(transport);
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 7);
+  assert.equal(tools.length, 9);
   for (const name of [
     'create_product_video',
     'get_video',
@@ -31,6 +31,8 @@ try {
     'render_video',
     'export_video',
     'cancel_video',
+    'plan_launch_video',
+    'generate_animation',
   ])
     assert.ok(tools.some((t) => t.name === name));
   const voices = await client.callTool({ name: 'list_voices', arguments: {} });
@@ -47,7 +49,7 @@ try {
   assert.equal(rows.isError, false);
   assert.deepEqual(JSON.parse(rows.content[0].text), []);
   console.log(
-    'PASS: official MCP handshake, seven tools, voice selection, workspace listing, invalid input, and private-network rejection.',
+    'PASS: official MCP handshake, nine tools, voice selection, workspace listing, invalid input, and private-network rejection.',
   );
 } finally {
   await client.close();

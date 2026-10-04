@@ -31,11 +31,20 @@ import {
   X,
 } from 'lucide-react';
 import { accessToken, api, initialize } from '../api';
-import type { Features, Playback, Video, Voice } from './types';
+import type { Features, Playback, TimelineClip, Video, Voice } from './types';
+import TimelineEditor, { initialClips, newTitle } from './TimelineEditor';
 
 const DEMO_BRIEF =
   'Show how Meridian brings projects together. Open Projects, explore the Website refresh project, switch to its Board, and finish with Analytics. Explain the benefit of a clearer view of team progress.';
-const BUSY = new Set(['queued', 'exploring', 'recording', 'scripting', 'narrating', 'rendering']);
+const BUSY = new Set([
+  'queued',
+  'exploring',
+  'recording',
+  'scripting',
+  'narrating',
+  'rendering',
+  'generating',
+]);
 const duration = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(Math.round(seconds % 60)).padStart(2, '0')}`;
 
@@ -133,11 +142,19 @@ export default function Studio() {
   const [saving, setSaving] = useState(false);
   const [playback, setPlayback] = useState<Playback | null>(null);
   const [posters, setPosters] = useState<Record<string, string>>({});
-  const [scripts, setScripts] = useState<string[]>([]);
+  const [clips, setClips] = useState<TimelineClip[]>([]);
+  const [audioSource, setAudioSource] = useState<'generated' | 'uploaded'>('generated');
+  const [planning, setPlanning] = useState(false);
+  const [animationProvider, setAnimationProvider] = useState<'veo' | 'sora'>('veo');
+  const [animationPrompt, setAnimationPrompt] = useState(
+    'Ivory background, coral and sage geometric panels gently organizing into one elegant frame. Soft studio lighting, precise smooth motion. End on a clean ivory background for a dissolve into the product.',
+  );
   const [voice, setVoice] = useState('marin');
   const [music, setMusic] = useState<'ambient' | 'momentum' | 'none'>('ambient');
   const [theme, setTheme] = useState<'midnight' | 'paper'>('midnight');
-  const [editorTab, setEditorTab] = useState<'script' | 'style' | 'activity'>('script');
+  const [editorTab, setEditorTab] = useState<'script' | 'style' | 'animation' | 'activity'>(
+    'script',
+  );
   const [copied, setCopied] = useState('');
   const [tokenVisible, setTokenVisible] = useState(false);
   const [token, setToken] = useState('');
@@ -155,6 +172,7 @@ export default function Studio() {
     login_url: '',
     credentials: false,
     duration: 60,
+    format: 'launch' as 'launch' | 'walkthrough',
   });
   const videoElement = useRef<HTMLVideoElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -166,7 +184,16 @@ export default function Studio() {
       api<Voice[]>('/api/voices'),
       fetch('/api/config').then((r) => r.json()),
     ]);
-    setVideos(items);
+    setVideos((current) =>
+      items.map((item) => {
+        const existing = current.find((v) => v.id === item.id);
+        return existing?.payload.updated_at &&
+          item.payload.updated_at &&
+          existing.payload.updated_at > item.payload.updated_at
+          ? existing
+          : item;
+      }),
+    );
     setVoices(narrators);
     setFeatures(config.video);
   }
@@ -201,17 +228,32 @@ export default function Studio() {
     }
   }, [videos, posters]);
   useEffect(() => {
-    setPlayback(null);
     if (!job) return;
     setVoice(job.payload.voice);
     setMusic(job.payload.music);
     setTheme(job.payload.theme);
-    setScripts(job.payload.scenes.map((s) => s.narration));
-    if (job.status === 'complete') {
+    setClips(job.payload.timeline || initialClips(job.payload.scenes));
+    setAudioSource(
+      job.payload.uploaded_narration && job.payload.use_uploaded_narration !== false
+        ? 'uploaded'
+        : 'generated',
+    );
+  }, [job?.id, job?.payload.revision, job?.payload.scenes.length]);
+  useEffect(() => {
+    let active = true;
+    setPlayback(null);
+    if (job?.status === 'complete') {
       api<Playback>(`/api/videos/${job.id}/playback`)
-        .then(setPlayback)
-        .catch((e) => setError(e.message));
+        .then((info) => {
+          if (active) setPlayback(info);
+        })
+        .catch((e) => {
+          if (active) setError(e.message);
+        });
     }
+    return () => {
+      active = false;
+    };
   }, [job?.id, job?.status, job?.payload.revision]);
   useEffect(() => {
     if (!notice) return;
@@ -231,6 +273,7 @@ export default function Studio() {
         music,
         theme,
         duration: form.duration,
+        format: form.format,
         demo,
         credentials:
           form.credentials && !demo
@@ -260,7 +303,8 @@ export default function Studio() {
     try {
       const result = await api<Video>('/api/videos/render', {
         video_id: job.id,
-        narration: scripts,
+        clips,
+        audio_source: audioSource,
         voice,
         music,
         theme,
@@ -292,7 +336,48 @@ export default function Studio() {
       setSaving(false);
     }
   }
-  async function previewVoice(id: string) {
+  async function planLaunch() {
+    if (!job) return;
+    setPlanning(true);
+    setError('');
+    try {
+      const plan = await api<{ clips: TimelineClip[] }>(`/api/videos/${job.id}/launch-plan`, {});
+      const titles = plan.clips.filter((c) => c.kind === 'title');
+      const footage = clips.filter((c) => c.kind !== 'title');
+      const middle = Math.min(2, footage.length);
+      setClips([
+        titles[0],
+        ...footage.slice(0, middle),
+        titles[1],
+        ...footage.slice(middle),
+        titles[2],
+      ]);
+      setNotice('Launch sequence added to your draft. Edit the headlines and render changes.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPlanning(false);
+    }
+  }
+  async function generateAnimation() {
+    if (!job) return;
+    setSaving(true);
+    setError('');
+    try {
+      const result = await api<Video>(`/api/videos/${job.id}/animations`, {
+        provider: animationProvider,
+        prompt: animationPrompt,
+        seconds: 4,
+      });
+      setVideos((items) => items.map((v) => (v.id === job.id ? result : v)));
+      setNotice('Generating a four-second visual. Your timeline draft stays intact.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function previewVoice(id: string, text?: string) {
     if (!features.narration && !id.includes('-')) {
       setNotice('Connect an OpenAI API key to hear the stock voices.');
       return;
@@ -305,7 +390,7 @@ export default function Studio() {
           Authorization: `Bearer ${await accessToken()}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ voice: id }),
+        body: JSON.stringify({ voice: id, ...(text ? { text } : {}) }),
       });
       if (!response.ok) {
         const data = await response.json();
@@ -352,6 +437,7 @@ export default function Studio() {
       body.set('file', file);
       await api(`/api/videos/${job.id}/narration`, undefined, body);
       await refresh();
+      setAudioSource('uploaded');
       setNotice('Narration uploaded. Render changes to use your recording.');
     } catch (e) {
       setError((e as Error).message);
@@ -681,6 +767,18 @@ export default function Studio() {
                     </div>
                   </label>
                   <label>
+                    Film format
+                    <select
+                      value={form.format}
+                      onChange={(e) =>
+                        setForm({ ...form, format: e.target.value as typeof form.format })
+                      }
+                    >
+                      <option value="launch">Launch film · hook, product proof, closing</option>
+                      <option value="walkthrough">Product walkthrough · footage only</option>
+                    </select>
+                  </label>
+                  <label>
                     Video title
                     <input
                       placeholder="Meet your next favorite feature"
@@ -984,7 +1082,7 @@ export default function Studio() {
                 )}
                 <div className="timeline-heading">
                   <h3>The storyboard</h3>
-                  <span>{job.payload.scenes.length} scenes</span>
+                  <span>{(playback?.scenes || job.payload.scenes).length} scenes</span>
                 </div>
                 <div className="scene-strip">
                   {(playback?.scenes || job.payload.scenes).map((scene, i) => (
@@ -993,11 +1091,11 @@ export default function Studio() {
                       className="scene-tile"
                       onClick={() => {
                         if (videoElement.current)
-                          videoElement.current.currentTime = (
-                            playback?.scenes || job.payload.scenes
-                          )
-                            .slice(0, i)
-                            .reduce((n, s) => n + (s.duration || 0), 0);
+                          videoElement.current.currentTime =
+                            scene.timeline_start ??
+                            (playback?.scenes || job.payload.scenes)
+                              .slice(0, i)
+                              .reduce((n, s) => n + (s.duration || 0), 0);
                       }}
                     >
                       <div>
@@ -1045,7 +1143,7 @@ export default function Studio() {
               </div>
               <aside className="editor-inspector">
                 <div className="inspector-tabs">
-                  {(['script', 'style', 'activity'] as const).map((t) => (
+                  {(['script', 'style', 'animation', 'activity'] as const).map((t) => (
                     <button
                       className={editorTab === t ? 'active' : ''}
                       key={t}
@@ -1062,29 +1160,16 @@ export default function Studio() {
                       <h3>A voice for your story.</h3>
                       <p>Tweak a line. We’ll match the scene to the new narration.</p>
                     </div>
-                    {job.payload.scenes.map((scene, i) => (
-                      <label className="script-scene" key={i}>
-                        <span>
-                          <i>{String(i + 1).padStart(2, '0')}</i>
-                          {scene.label}
-                        </span>
-                        <textarea
-                          aria-label={`Scene ${i + 1} narration`}
-                          rows={4}
-                          value={scripts[i] || ''}
-                          maxLength={1000}
-                          onChange={(e) =>
-                            setScripts((s) => s.map((text, n) => (n === i ? e.target.value : text)))
-                          }
-                          disabled={BUSY.has(job.status)}
-                        />
-                      </label>
-                    ))}
-                    {!job.payload.scenes.length && (
-                      <p className="inspector-empty">
-                        Your script appears here once the feature has been filmed.
-                      </p>
-                    )}
+                    <TimelineEditor
+                      clips={clips}
+                      scenes={job.payload.scenes}
+                      onChange={setClips}
+                      onPlan={planLaunch}
+                      onPreview={(text) => previewVoice(voice, text)}
+                      disabled={BUSY.has(job.status) || saving}
+                      planning={planning}
+                      previewing={Boolean(previewing)}
+                    />
                     <input
                       ref={uploadRef}
                       type="file"
@@ -1104,9 +1189,20 @@ export default function Studio() {
                       Upload finished narration
                     </button>
                     {job.payload.uploaded_narration && (
-                      <small className="field-hint">
-                        Your uploaded recording will be used on the next render.
-                      </small>
+                      <label>
+                        Audio source
+                        <select
+                          value={audioSource}
+                          onChange={(e) => setAudioSource(e.target.value as typeof audioSource)}
+                        >
+                          <option value="generated">Generate speech from edited words</option>
+                          <option value="uploaded">Use my uploaded recording</option>
+                        </select>
+                        <small className="field-hint">
+                          Edited words change generated speech. Uploaded audio keeps its original
+                          spoken words.
+                        </small>
+                      </label>
                     )}
                   </div>
                 )}
@@ -1171,6 +1267,110 @@ export default function Studio() {
                       </span>
                     </div>
                     <p className="voice-disclosure">Generated narration uses a synthetic voice.</p>
+                  </div>
+                )}
+                {editorTab === 'animation' && (
+                  <div className="animation-editor">
+                    <div className="inspector-intro">
+                      <Sparkles size={16} />
+                      <h3>A little launch energy.</h3>
+                      <p>Create a visual beat, then blend it into the real product.</p>
+                    </div>
+                    <p className="field-hint">
+                      Animated titles and product reveals work without a video-generation API. Add
+                      them in Script → Add launch sequence.
+                    </p>
+                    <label>
+                      Video model
+                      <select
+                        value={animationProvider}
+                        onChange={(e) =>
+                          setAnimationProvider(e.target.value as typeof animationProvider)
+                        }
+                      >
+                        <option value="veo">Google Veo 3.1 Fast</option>
+                        <option value="sora">OpenAI Sora 2</option>
+                      </select>
+                    </label>
+                    <label>
+                      Visual direction
+                      <textarea
+                        rows={5}
+                        maxLength={2000}
+                        value={animationPrompt}
+                        onChange={(e) => setAnimationPrompt(e.target.value)}
+                        placeholder="Describe colors, shapes, movement and mood."
+                      />
+                    </label>
+                    <p className="field-hint">
+                      One 4s clip · 720p · Uses provider credits. Abstract visuals only; product
+                      screens come from your real capture. Generated audio is replaced by your
+                      selected narration and soundtrack.
+                    </p>
+                    <button
+                      className="button coral"
+                      disabled={
+                        saving ||
+                        BUSY.has(job.status) ||
+                        !features.video_generation?.[animationProvider] ||
+                        animationPrompt.trim().length < 12
+                      }
+                      onClick={generateAnimation}
+                    >
+                      <Sparkles size={14} />
+                      Generate animation
+                    </button>
+                    {!features.video_generation?.[animationProvider] && (
+                      <p className="field-hint">Configure this provider to enable generation.</p>
+                    )}
+                    <div className="animation-assets">
+                      {(job.payload.assets || []).map((asset) => {
+                        const preview = playback?.assets?.find((a) => a.id === asset.id);
+                        return (
+                          <div className="animation-asset" key={asset.id}>
+                            {preview?.url && (
+                              <video
+                                src={preview.url}
+                                poster={preview.thumbnail_url}
+                                controls
+                                muted
+                                playsInline
+                                preload="metadata"
+                              />
+                            )}
+                            <b>
+                              {asset.provider === 'veo' ? 'Veo animation' : 'Sora animation'} ·{' '}
+                              {asset.duration}s
+                            </b>
+                            <small>{asset.status === 'failed' ? asset.error : asset.status}</small>
+                            {asset.status === 'complete' && (
+                              <button
+                                className="text-button"
+                                disabled={clips.length >= 24}
+                                onClick={() => {
+                                  const clip = {
+                                    ...newTitle(),
+                                    kind: 'generated' as const,
+                                    asset_id: asset.id,
+                                    duration: asset.duration,
+                                    label: 'Generated launch visual',
+                                    headline: job.title,
+                                  };
+                                  setClips((current) => [clip, ...current]);
+                                  setEditorTab('script');
+                                  setNotice(
+                                    'Animation added to the start of your draft. Move it anywhere and render changes.',
+                                  );
+                                }}
+                              >
+                                <Plus size={12} />
+                                Add to timeline
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
                 {editorTab === 'activity' && (
@@ -1417,7 +1617,9 @@ export default function Studio() {
                     ['create_product_video', 'A link, credentials, and a feature brief.'],
                     ['get_video', 'Follow progress and review the story.'],
                     ['list_voices', 'Choose a stock or custom narrator.'],
-                    ['render_video', 'Refine the script, music, and look.'],
+                    ['render_video', 'Edit words, scene cuts, timing, music, and look.'],
+                    ['plan_launch_video', 'Draft an animated opening, spotlight, and closing.'],
+                    ['generate_animation', 'Create a short Veo or Sora visual for the timeline.'],
                     ['export_video', 'Get a private MP4 link.'],
                   ].map(([name, desc]) => (
                     <div key={name}>

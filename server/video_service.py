@@ -17,9 +17,16 @@ from fastapi import HTTPException
 
 from server.network import public_target
 from server.store import LOCAL_DEMO, Store
-from server.video_models import STOCK_VOICES, RenderInput, VideoInput
+from server.video_models import (
+    STOCK_VOICES,
+    GenerateClipInput,
+    RenderInput,
+    TimelineClip,
+    VideoInput,
+)
 from server.video_providers import capabilities, reason, setting, speech
 from server.video_render import ffmpeg, render
+from server.video_timeline import browser_clips, compile_timeline, launch_clips
 
 ROOT = Path(__file__).resolve().parent.parent
 VIDEO_DIR = Path(os.getenv("CUTROOM_DATA_DIR", ".cutroom")).resolve()
@@ -295,6 +302,7 @@ def film(store: Store, job: dict, body: VideoInput):
                 "Writing a voiceover from the screens the agent actually demonstrated.",
                 60,
             )
+            result = {}
             if body.demo and not capabilities()["reasoning"]:
                 scripts = [
                     "Meet Meridian. A calmer place to bring your team's work together, from the first idea to the final delivery.",
@@ -308,7 +316,7 @@ def film(store: Store, job: dict, body: VideoInput):
                     f"Write a concise feature demo voiceover for {body.title}. Brief: {body.brief}. "
                     f"Target duration: {body.duration}s. Actual captured scenes: {json.dumps(scenes)}. "
                     f"Verified screen text after each action: {json.dumps(views)}. "
-                    'Return {"narration":["one sentence or two per scene"]}. '
+                    'Return {"narration":["one sentence or two per scene"], "launch":{"hook":{"headline":"short opening hook","subtitle":"","narration":"opening line, 8 words"},"benefit":{"headline":"one verified benefit","subtitle":"","narration":"8 words"},"outro":{"headline":"closing invitation","subtitle":"","narration":"8 words"}}}. '
                     f"Exactly {len(scenes)} entries. Budget about {int(body.duration * 2.1 / len(scenes))} words per entry. "
                     "Explain benefits supported by the screen. No invented metrics, no pricing claims, no credentials."
                 )
@@ -322,6 +330,11 @@ def film(store: Store, job: dict, body: VideoInput):
             for scene, script in zip(scenes, scripts, strict=True):
                 scene["narration"] = script
             job["payload"]["scenes"] = scenes
+            job["payload"]["timeline"] = (
+                launch_clips(scenes, body.title, result.get("launch"))
+                if body.format == "launch"
+                else browser_clips(scenes)
+            )
             event(store, job, "narrating", "Generating the voiceover and aligning each scene.", 66)
             finish_render(store, job, folder)
     except InterruptedError:
@@ -347,10 +360,15 @@ def film(store: Store, job: dict, body: VideoInput):
 
 
 def finish_render(store: Store, job: dict, folder: Path):
-    scenes, payload = job["payload"]["scenes"], job["payload"]
+    payload = job["payload"]
+    scenes = (
+        compile_timeline(job, [TimelineClip.model_validate(c) for c in payload["timeline"]])
+        if payload.get("timeline")
+        else payload["scenes"]
+    )
     custom = resolve_voice(store, payload["voice"])
     audio_paths = []
-    uploaded = payload.get("uploaded_narration")
+    uploaded = payload.get("uploaded_narration") and payload.get("use_uploaded_narration", True)
     if uploaded:
         payload["narration_source"] = "Uploaded recording"
         full_wav = folder / "uploaded.wav"
@@ -370,7 +388,9 @@ def finish_render(store: Store, job: dict, folder: Path):
         for i, scene in enumerate(scenes):
             cancelled(store, job)
             audio = folder / f"speech-{i}.mp3"
-            if payload.get("demo") and not setting("OPENAI_API_KEY"):
+            if not scene.get("narration", "").strip():
+                audio = None
+            elif payload.get("demo") and not setting("OPENAI_API_KEY") and not custom:
                 if os.name == "posix" and Path("/usr/bin/say").exists():
                     aiff = folder / f"speech-{i}.aiff"
                     subprocess.run(
@@ -436,6 +456,7 @@ def finish_render(store: Store, job: dict, folder: Path):
             )
         payload["storage_path"] = f"{store.user_id}/{job['id']}/film.mp4"
     payload["export"] = meta
+    payload["rendered_scenes"] = scenes
     cancelled(store, job)
     event(store, job, "complete", "Your film is ready. Review the script or download the MP4.", 100)
 
@@ -448,17 +469,25 @@ def prepare_render(store: Store, body: RenderInput) -> dict:
         raise HTTPException(
             409, "The original capture is unavailable on this worker. Start a new take."
         )
-    if len(body.narration) != len(job["payload"]["scenes"]):
-        raise HTTPException(400, "Supply one narration entry per captured scene.")
-    if any(not t.strip() or len(t) > 1000 for t in body.narration):
-        raise HTTPException(400, "Each scene needs 1–1000 characters of narration.")
     resolve_voice(store, body.voice)
-    for scene, text in zip(job["payload"]["scenes"], body.narration, strict=True):
-        scene["narration"] = text.strip()
+    if body.audio_source == "uploaded" and not job["payload"].get("uploaded_narration"):
+        raise HTTPException(400, "Upload a finished narration before choosing that audio source.")
+    if body.clips is not None:
+        compile_timeline(job, body.clips)
+        job["payload"]["timeline"] = [c.model_dump(mode="json") for c in body.clips]
+    else:
+        if len(body.narration) != len(job["payload"]["scenes"]):
+            raise HTTPException(400, "Supply one narration entry per captured scene.")
+        if any(not t.strip() or len(t) > 1000 for t in body.narration):
+            raise HTTPException(400, "Each scene needs 1–1000 characters of narration.")
+        for scene, text in zip(job["payload"]["scenes"], body.narration, strict=True):
+            scene["narration"] = text.strip()
+        job["payload"]["timeline"] = browser_clips(job["payload"]["scenes"])
     job["payload"].update(
         voice=body.voice,
         music=body.music,
         theme=body.theme,
+        use_uploaded_narration=body.audio_source == "uploaded",
         revision=job["payload"].get("revision", 1) + 1,
     )
     event(store, job, "queued", "Your edits are saved. Rendering a new version.", 60)
@@ -481,5 +510,85 @@ def rerender(store: Store, job: dict):
             "The new version could not be rendered. Check voice access and retry.",
             60,
         )
+    finally:
+        release(job["id"])
+
+
+def prepare_animation(store: Store, video_id: str, body: GenerateClipInput) -> tuple[dict, str]:
+    from server.video_generation import generation_capabilities
+
+    job = get_video(store, video_id)
+    if job["status"] != "complete":
+        raise HTTPException(409, "Finish this film before generating an animation.")
+    if not generation_capabilities()[body.provider]:
+        raise HTTPException(503, "Configure the selected video-generation provider first.")
+    assets = job["payload"].setdefault("assets", [])
+    if len(assets) >= 8:
+        raise HTTPException(400, "This video already has eight generated assets.")
+    asset_id = str(uuid.uuid4())
+    assets.append(
+        {
+            "id": asset_id,
+            "status": "queued",
+            "provider": body.provider,
+            "prompt": body.prompt,
+            "duration": body.seconds,
+            "filename": f"asset-{asset_id}.mp4",
+        }
+    )
+    event(
+        store,
+        job,
+        "generating",
+        "Generating a short original launch animation. Your existing film is preserved.",
+        70,
+    )
+    return job, asset_id
+
+
+def generate_animation(store: Store, job: dict, body: GenerateClipInput, asset_id: str):
+    from server.video_generation import generate_file
+
+    if not claim(job["id"]):
+        return
+    asset = next(a for a in job["payload"]["assets"] if a["id"] == asset_id)
+    folder = directory(store, job["id"])
+    try:
+        with SLOTS:
+            cancelled(store, job)
+            generate_file(
+                body.provider,
+                body.prompt,
+                body.seconds,
+                folder / asset["filename"],
+                lambda: cancelled(store, job),
+            )
+            ffmpeg(
+                "-ss",
+                "1",
+                "-i",
+                str(folder / asset["filename"]),
+                "-frames:v",
+                "1",
+                str(folder / f"asset-{asset_id}.jpg"),
+            )
+            asset["status"] = "complete"
+            event(
+                store,
+                job,
+                "complete",
+                "Your animation is ready. Add it to the timeline and render your film.",
+                100,
+            )
+    except InterruptedError:
+        asset["status"] = "cancelled"
+    except Exception as exc:
+        asset["status"] = "failed"
+        asset["error"] = (
+            str(exc)[:250]
+            if isinstance(exc, ValueError)
+            else "Animation generation failed. Check provider access."
+        )
+        event(store, job, "complete", asset["error"] + " Your existing film is preserved.", 100)
     finally:
         release(job["id"])

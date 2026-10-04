@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -26,24 +27,28 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from server.store import LOCAL_DEMO, SUPABASE_KEY, SUPABASE_URL, Store, authenticate
-from server.video_models import RenderInput, VideoId, VideoInput
-from server.video_providers import capabilities, clone_voice, setting, speech
+from server.video_generation import generation_capabilities
+from server.video_models import GenerateClipInput, RenderInput, VideoId, VideoInput
+from server.video_providers import capabilities, clone_voice, reason, setting, speech
 from server.video_service import (
     VIDEO_DIR,
     create_video,
     directory,
     event,
     film,
+    generate_animation,
     get_video,
+    prepare_animation,
     prepare_render,
     rerender,
     resolve_voice,
     voices,
 )
+from server.video_timeline import launch_clips
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGNING_KEY = setting("CUTROOM_SIGNING_KEY", secrets.token_hex(32)).encode()
@@ -63,7 +68,7 @@ def config():
         "mode": "local-demo" if LOCAL_DEMO else "supabase",
         "configured": LOCAL_DEMO or bool(SUPABASE_URL and SUPABASE_KEY),
         "providers": {},
-        "video": capabilities(),
+        "video": {**capabilities(), "video_generation": generation_capabilities()},
     }
 
 
@@ -136,7 +141,16 @@ def playback_info(store: Store, job: dict) -> dict:
         "expires_in": 1800,
         "scenes": [
             {**s, "thumbnail_url": media_url(store, job["id"], s["thumbnail"])}
-            for s in job["payload"]["scenes"]
+            for s in job["payload"].get("rendered_scenes", job["payload"]["scenes"])
+        ],
+        "assets": [
+            {
+                **a,
+                "thumbnail_url": media_url(store, job["id"], f"asset-{a['id']}.jpg"),
+                "url": media_url(store, job["id"], a["filename"]),
+            }
+            for a in job["payload"].get("assets", [])
+            if a["status"] == "complete"
         ],
     }
 
@@ -149,7 +163,7 @@ def playback(video_id: uuid.UUID, store: Store = Depends(workspace)):
 @app.get("/media/{video_id}/{filename}")
 def media(video_id: uuid.UUID, filename: str, workspace: uuid.UUID, expires: int, signature: str):
     if filename not in ("film.mp4", "poster.jpg") and not re.fullmatch(
-        r"scene-\d{1,2}\.jpg", filename
+        r"(?:scene|edit)-\d{1,2}\.jpg|asset-[0-9a-f-]{36}\.(?:mp4|jpg)", filename
     ):
         raise HTTPException(404, "File not found.")
     subject = f"{workspace}:{video_id}:{filename}:{expires}"
@@ -177,6 +191,11 @@ def list_voices(store: Store = Depends(workspace)):
 
 class VoicePreview(BaseModel):
     voice: str = "marin"
+    text: str = Field(
+        default="Meet your next product demo. Clear, confident, and ready to share.",
+        min_length=1,
+        max_length=1000,
+    )
 
 
 @app.post("/api/voices/preview")
@@ -187,7 +206,7 @@ def preview_voice(body: VoicePreview, store: Store = Depends(workspace)):
     path = folder / f"{uuid.uuid4()}.mp3"
     try:
         speech(
-            "Meet your next product demo. Clear, confident, and ready to share.",
+            body.text,
             body.voice,
             path,
             custom,
@@ -256,6 +275,41 @@ class Empty(BaseModel):
     pass
 
 
+class GenerateAnimationInput(GenerateClipInput, VideoId):
+    pass
+
+
+@app.post("/api/videos/{video_id}/animations")
+def animation(
+    video_id: uuid.UUID,
+    body: GenerateClipInput,
+    tasks: BackgroundTasks,
+    store: Store = Depends(workspace),
+):
+    job, asset_id = prepare_animation(store, str(video_id), body)
+    tasks.add_task(generate_animation, store, job, body, asset_id)
+    return job
+
+
+@app.post("/api/videos/{video_id}/launch-plan")
+def launch_plan(video_id: uuid.UUID, store: Store = Depends(workspace)):
+    job = get_video(store, str(video_id))
+    scenes = job["payload"]["scenes"]
+    if not scenes:
+        raise HTTPException(409, "Capture the product before planning launch scenes.")
+    plan = None
+    if capabilities()["reasoning"]:
+        try:
+            plan = reason(
+                f"Create opening hook, one benefit card, and closing invitation for a launch film. Product: {job['title']}. Brief: {job['payload']['brief']}. Verified captured scenes: {json.dumps(scenes)}. Return JSON keys hook, benefit, outro; each has headline (2–7 words), subtitle (one short sentence), narration (6–10 words). Only claim benefits visible in the captured scenes. No invented stats, prices or testimonials."
+            )
+        except (ValueError, httpx.HTTPError):
+            raise HTTPException(
+                503, "Launch copy could not be planned. Add an animated title manually."
+            ) from None
+    return {"clips": launch_clips(scenes, job["title"], plan)}
+
+
 TOOLS = [
     (
         "create_product_video",
@@ -271,7 +325,7 @@ TOOLS = [
     ("list_voices", "List stock voices and this workspace's custom voices.", Empty),
     (
         "render_video",
-        "Revise the narration, voice, music, or theme using an existing capture. Supply one narration string per scene; poll get_video.",
+        "Edit the source-referenced timeline: exact narration, titles, cuts/restores, ordering, trims, generated assets, and transitions. Supply clips from payload.timeline, or a legacy narration string per original captured scene. Select generated or uploaded audio. Poll get_video.",
         RenderInput,
     ),
     (
@@ -280,6 +334,16 @@ TOOLS = [
         VideoId,
     ),
     ("cancel_video", "Stop a video job at its next stage boundary.", VideoId),
+    (
+        "plan_launch_video",
+        "Plan editable animated hook, benefit and closing scenes grounded in the captured product. Returns a timeline draft; submit it to render_video.",
+        VideoId,
+    ),
+    (
+        "generate_animation",
+        "Generate a short original abstract animation with Veo or Sora. Uses provider credits, preserves the existing film, and returns the job; poll get_video for assets. Add a finished asset with kind=generated in render_video.",
+        GenerateAnimationInput,
+    ),
 ]
 
 
@@ -337,6 +401,15 @@ def mcp(body: dict, tasks: BackgroundTasks, request: Request, store: Store = Dep
                 for key in ("url", "poster_url"):
                     if output.get(key, "") and output[key].startswith("/"):
                         output[key] = origin + output[key]
+                for item in [*output.get("scenes", []), *output.get("assets", [])]:
+                    for key in ("url", "thumbnail_url"):
+                        if item.get(key, "").startswith("/"):
+                            item[key] = origin + item[key]
+            elif name == "plan_launch_video":
+                output = launch_plan(args.video_id, store)
+            elif name == "generate_animation":
+                output, asset_id = prepare_animation(store, str(args.video_id), args)
+                tasks.add_task(generate_animation, store, output, args, asset_id)
             elif name == "cancel_video":
                 output = cancel(args.video_id, store)
             else:

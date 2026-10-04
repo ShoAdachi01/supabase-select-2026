@@ -144,7 +144,7 @@ def speech(text: str, voice: str, path: Path, custom: dict | None = None):
                     "model": "gpt-4o-mini-tts",
                     "voice": voice_arg,
                     "input": text,
-                    "instructions": "Natural product presenter. Clear, confident, relaxed. No sales hype. Moderate pace.",
+                    "instructions": "An engaging product launch presenter: bright, confident, conversational energy. Vary pitch and rhythm, emphasize the key benefit in each sentence, and land the final phrase with purpose. Crisp forward momentum, small natural pauses. Sound excited to show something useful, never flat or robotic, never shout.",
                     "response_format": "mp3",
                 },
                 timeout=90,

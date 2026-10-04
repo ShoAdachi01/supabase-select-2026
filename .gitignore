@@ -24,3 +24,5 @@ supabase/.branches/
 *.tsbuildinfo
 .ruff_cache/
 .vercel
+
+UI_EXPLANATION.md

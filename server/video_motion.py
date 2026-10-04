@@ -47,16 +47,22 @@ def motion_frame(
     left = 120
     top = 275 if layout == "hook" else 300
     width = 760 if layout == "hook" and reveal else 1600
-    face = font(104 if layout == "hook" else 116)
+    face = font(104 if layout == "hook" else 116, bold=True)
     lines = text_lines(scene.get("headline", ""), face, width)
     # Long user copy fits instead of being silently truncated.
     if len(lines) > 4:
-        face = font(72)
+        face = font(72, bold=True)
         lines = text_lines(scene.get("headline", ""), face, width)
     line_height = face.size + 12
     draw.rounded_rectangle((left, top - 74, left + round(72 * entrance), top - 68), 3, fill=accent)
     for i, line in enumerate(lines):
-        draw.text((left, top + i * line_height + offset), line, font=face, fill=fg)
+        line_offset = round(48 * (1 - ease((t - i * 0.08) / 0.4)))
+        draw.text(
+            (left, top + i * line_height + line_offset),
+            line,
+            font=face,
+            fill=accent if i == len(lines) - 1 and len(lines) > 1 else fg,
+        )
     subtitle_top = top + len(lines) * line_height + 34
     for i, line in enumerate(text_lines(scene.get("subtitle", ""), font(30), width)):
         draw.text((left + 4, subtitle_top + i * 40 + offset), line, font=font(30), fill=muted)

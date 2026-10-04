@@ -4,7 +4,7 @@
 
 The web app and authenticated MCP connector use the same jobs, voices, storyboard, and exports. This is a working hackathon prototype, not a billing-enabled production service.
 
-![Cutroom launch film with animated product reveal and non-destructive scene editor](docs/screenshots/cutroom-launch-editor.png)
+![Cutroom studio with a product-link entry and recent films](docs/screenshots/cutroom-studio.png)
 
 ## Run locally
 
@@ -48,7 +48,7 @@ Open **http://127.0.0.1:5173**. The browser creates an anonymous Supabase worksp
 
 The default **Launch film** targets 30 seconds, with 2–4-second shots, brief animated typography, full-screen product footage, and clean cuts. Opening and spotlight reveals expand the exact first frame of the following trimmed shot to fill the canvas. The redundant overview is cut but can be restored. Typography is silent by default, reserving narration for product footage. **Product walkthrough** keeps only browser footage. In existing projects, **Add launch sequence** drafts opening, benefit, and closing copy and shortens narration from the verified captured scenes. Every line remains editable. Cuts are non-destructive: original captures remain intact, and a cut scene can be restored.
 
-The renderer uses original synthesized instrumental beds, automatically mixed and ducked under speech. It does not require a music-generation API or external music assets. The actual duration depends on shot budgets, generated speech, and the number of captured scenes. Edited long narration is preserved and can exceed the target; the editor flags likely overruns.
+The renderer uses original synthesized instrumental beds, automatically mixed and ducked under speech. Voice and music are loudness-normalized separately, with gentle ducking and a final peak limiter; the momentum bed includes bass and percussion. It does not require a music-generation API or external music assets. The actual duration depends on shot budgets, generated speech, and the number of captured scenes. Edited long narration is preserved and can exceed the target; the editor flags likely overruns.
 
 The **sample app** is Meridian, a fictional project workspace bundled in `public/sample/`. With API keys it uses the real director and speech pipeline. Without reasoning keys, the sample uses a deterministic four-action path. On macOS without a speech key it uses the local system narrator; on other systems the unconfigured sample is silent. These fallbacks are labelled. They are not evidence of autonomous execution on an arbitrary app.
 
@@ -145,6 +145,8 @@ npm run test:editing   # Run after test:video:e2e; real UI word edits, cuts, tri
 ```
 
 The API and Vite servers must be running for integration checks. End-to-end verification uses configured model/speech credits when available and writes an actual film and screenshots under `.cutroom/verification/`. Without keys it uses the labelled sample fallbacks. Existing Trace browser/stack checks apply only to the prior Trace app.
+
+To reproduce Cutroom’s own directed launch film, first run `test:video:e2e` and `test:launch` to create the private verification workspace and its sample film. Run `node scripts/capture_studio_launch.mjs`, then `.venv/bin/python -m scripts.render_studio_launch`. This records the actual local UI and renders a narrated 1080p film under `.cutroom/verification/cutroom-launch/film.mp4`. Narration uses OpenAI credits. Pass `--reuse-audio` to the render command only when the spoken copy is unchanged. This is a scripted capture of our studio, not a test of autonomous URL-only navigation.
 
 The public-URL check uses Playwright's TodoMVC demo, which stores task changes only in that browser's localStorage. It verifies a real deployed URL with the sample shortcut disabled. This is a tested example, not a benchmark across arbitrary apps. The Docker runtime has also passed a full offline sample capture, FFmpeg render, and signed MP4 playback check under its non-root user.
 

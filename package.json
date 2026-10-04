@@ -1,0 +1,44 @@
+{
+  "name": "cutroom-video-studio",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "server": ".venv/bin/uvicorn server.studio:app --host 127.0.0.1 --port 8000",
+    "server:trace": ".venv/bin/uvicorn server.app:app --host 127.0.0.1 --port 8001",
+    "test:video": ".venv/bin/pytest -q tests/test_video.py",
+    "test:video:e2e": "node scripts/verify_video.mjs",
+    "test": ".venv/bin/pytest -q && node scripts/verify_video_network.mjs",
+    "test:e2e": "node scripts/verify_video.mjs",
+    "test:stack": "node scripts/verify_video_mcp.mjs",
+    "test:login": "node scripts/verify_video_login.mjs",
+    "test:public": "node scripts/verify_video_public.mjs",
+    "test:revision": "node scripts/verify_video_revision.mjs",
+    "test:editing": "node scripts/verify_video_editing.mjs",
+    "test:mcp": "node scripts/verify_video_mcp.mjs",
+    "lint": ".venv/bin/ruff check server scripts tests && prettier --check src api vercel.ts tests/browser scripts/*.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json",
+    "format": ".venv/bin/ruff format server scripts tests && prettier --write src api vercel.ts tests/browser scripts/*.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json",
+    "test:launch": "node scripts/verify_video_launch.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.95.0",
+    "lucide-react": "^0.468.0",
+    "playwright": "^1.58.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "@playwright/test": "^1.58.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "prettier": "^3.9.9",
+    "typescript": "~5.8.3",
+    "vite": "^6.1.0"
+  }
+}

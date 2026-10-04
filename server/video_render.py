@@ -415,7 +415,9 @@ def render(
             ffmpeg(
                 "-f", "lavfi", "-i", "anullsrc=r=24000:cl=stereo", "-t", str(total + 0.1), str(bed)
             )
-        elif any(s.get("direction") for s in scenes) or (not voiced and music == "momentum"):
+        elif any(s.get("motion") == "directed" for s in scenes) or (
+            not voiced and music == "momentum"
+        ):
             launch_music(bed, total + 0.1, beats["bpm"], ambient=music == "ambient")
         else:
             original_music(bed, total + 0.1, music)

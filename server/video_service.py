@@ -225,7 +225,19 @@ def choose_action(observation: dict, body: VideoInput, history: list[dict]) -> d
             "Keep labels to 2–5 words. Never type secrets or change real customer data. "
             "Avoid touring unrelated pages merely to fill the duration."
         )
-    return reason(prompt, observation["screenshot"])
+    ids = {str(element["id"]) for element in observation.get("elements", [])}
+    for _attempt in range(2):
+        action = reason(prompt, observation["screenshot"])
+        kind = action.get("type")
+        valid = kind in {"click", "fill", "select", "scroll", "press", "hold", "done"}
+        if kind in {"click", "fill", "select"}:
+            valid = valid and str(action.get("id")) in ids
+        if kind == "press":
+            valid = valid and action.get("key") in {"Enter", "Escape", "Tab"}
+        if valid:
+            return action
+        prompt += " Your last action did not match the action contract. Return ONE supported type and an existing visible element ID, or done."
+    raise ValueError("The browser director could not select a supported visible action.")
 
 
 def film(store: Store, job: dict, body: VideoInput):
@@ -575,9 +587,15 @@ def finish_render(store: Store, job: dict, folder: Path):
             )
         payload["storage_path"] = f"{store.user_id}/{job['id']}/film.mp4"
     payload["export"] = meta
+    review_status = payload.get("direction", {}).get("review", {}).get("status")
+    if review_status:
+        payload["export"]["review_status"] = review_status
     payload["rendered_scenes"] = scenes
     cancelled(store, job)
-    event(store, job, "complete", "Your film is ready. Review the script or download the MP4.", 100)
+    message = "Your film is ready. Review the script or download the MP4."
+    if review_status in {"needs_review", "unavailable"}:
+        message = "Your draft is ready. Some visual checks still need review before publishing."
+    event(store, job, "complete", message, 100)
 
 
 def prepare_render(store: Store, body: RenderInput) -> dict:

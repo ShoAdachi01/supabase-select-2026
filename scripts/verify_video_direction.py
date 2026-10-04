@@ -42,6 +42,8 @@ def main():
     # Exported storyboard retains original capture IDs even when thumbnail points to an edited frame.
     if (args.source / "source-scenes.json").exists():
         scenes = json.loads((args.source / "source-scenes.json").read_text())
+    elif (args.source / "scenes.json").exists():
+        scenes = json.loads((args.source / "scenes.json").read_text())
     else:
         scenes = []
         for item in json.loads((args.source / "storyboard.json").read_text()):
@@ -50,6 +52,8 @@ def main():
                 scene["thumbnail"] = scene["scene_id"]
                 scene["narration"] = ""
                 scenes.append(scene)
+    for scene in scenes:
+        scene["narration"] = ""
     for name in [
         "raw.webm",
         *[s["thumbnail"] for s in scenes],

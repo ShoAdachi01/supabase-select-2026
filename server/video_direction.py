@@ -82,6 +82,28 @@ def constrain_geometry(plan: FilmDirection) -> FilmDirection:
     for a screen that is a few pixels too small. Stills retain expressive off-screen motion.
     """
     plan = plan.model_copy(deep=True)
+    # Reusing a capture as an animated background must not replay the same interaction.
+    # Keep the clearest proof take live; other appearances use its settled still.
+    for source in {shot.source for shot in plan.shots}:
+        candidates = [
+            shot
+            for shot in plan.shots
+            if shot.source == source and any(layer.kind == "footage" for layer in shot.layers)
+        ]
+        if len(candidates) > 1:
+            proof = max(
+                candidates,
+                key=lambda shot: (
+                    shot.composition == "product",
+                    -len(shot.layers),
+                    shot.beats * 60 / shot.bpm,
+                ),
+            )
+            for shot in candidates:
+                if shot is not proof:
+                    for layer in shot.layers:
+                        if layer.kind == "footage":
+                            layer.kind = "product"
     for shot in plan.shots:
         for layer in shot.layers:
             if layer.kind != "footage":
@@ -175,11 +197,11 @@ def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> l
                     backing = any(
                         other.kind == "shape"
                         and any(
-                            s.opacity == 1
+                            s.opacity >= 0.95
                             and s.x <= state.x
                             and s.y <= state.y
-                            and s.x + s.w >= state.x + state.w
-                            and s.y + s.h >= state.y + state.h
+                            and s.x + s.w + 1e-6 >= state.x + state.w
+                            and s.y + s.h + 1e-6 >= state.y + state.h
                             for s in other.states
                         )
                         for other in shot.layers[: shot.layers.index(layer)]
@@ -405,6 +427,8 @@ def review_film(
             'Return JSON {"findings":[{"shot":0,"time":0.5,"problem":"specific visible defect"}]}. '
             "Focus on OUR composited text, graphics and camera choices, NOT the customer's original UI styling. "
             "Never ask to recolor product pixels or enlarge every native UI label. Inspect added text especially: white on white is a defect. "
+            "Typing and masks intentionally reveal partial words during entrances. Report clipping only if settled text remains cropped; a brief graphic anticipation is not automatically an empty hold. "
+            "Live footage includes the cursor action before the destination appears; do not call a short action lead-in a duplicated shot. "
             "Check clipping, type readability and contrast, obscured interactions, repeated compositions, "
             "awkward spatial jumps, empty pauses, and whether real product evidence is clear. "
             "Do not give numeric quality scores, invent defects, or request new product assets. "
@@ -456,8 +480,8 @@ def review_film(
                 continue
             plan = revised
             report["revision_count"] += 1
-        except ProviderError:
-            report["passes"][-1]["rejected_revision"] = ["Revision provider unavailable."]
+        except ProviderError as exc:
+            report["passes"][-1]["rejected_revision"] = [str(exc)]
             break
         except (ValueError, TypeError) as exc:
             report["passes"][-1]["rejected_revision"] = [str(exc)[:2000]]

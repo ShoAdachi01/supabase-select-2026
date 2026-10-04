@@ -252,8 +252,8 @@ def test_motion_model_configuration_is_separate_from_browser_selection(monkeypat
     assert calls[0]["model"] == "gpt-4.1-mini"
     assert "reasoning" not in calls[0]
     assert calls[1]["model"] == "gpt-5.4"
-    assert calls[1]["reasoning"] == {"effort": "medium"}
-    assert calls[1]["max_output_tokens"] == 18000
+    assert calls[1]["reasoning"] == {"effort": "low"}
+    assert calls[1]["max_output_tokens"] == 14000
     assert calls[1]["store"] is False
 
 
@@ -272,3 +272,88 @@ def test_provider_access_error_is_not_retried_as_bad_art_direction(tmp_path, mon
     with pytest.raises(ProviderError):
         director.direct_film("Product", "Show features", sources(), tmp_path)
     assert len(calls) == 1
+
+
+def test_browser_director_repairs_unsupported_actions_before_execution(monkeypatch):
+    from server import video_service
+    from server.video_models import VideoInput
+
+    answers = iter(
+        [{"type": "navigate", "url": "https://unrequested.example"}, {"type": "click", "id": 7}]
+    )
+    monkeypatch.setattr(video_service, "reason", lambda *args: next(answers))
+    action = video_service.choose_action(
+        {"screenshot": "", "elements": [{"id": 7, "label": "Projects"}]},
+        VideoInput(url="https://example.com", brief="Show projects"),
+        [],
+    )
+    assert action == {"type": "click", "id": 7}
+
+
+def test_live_geometry_is_constrained_without_replacing_the_composition():
+    plan = film()
+    plan.shots[0].layers[0].states[0].w = 0.5
+    fitted = director.constrain_geometry(plan)
+    assert fitted.shots[0].layers[0].states[0].w == 0.65
+    assert plan.shots[0].layers[0].states[0].w == 0.5
+    assert fitted.shots[0].composition == plan.shots[0].composition
+
+
+def test_delayed_layer_gets_an_invisible_initial_state():
+    from server.video_direction_models import MotionLayer
+
+    layer = MotionLayer.model_validate(
+        dict(id="label", kind="text", text="Hello", states=[dict(beat=1, x=0.1, opacity=1)])
+    )
+    assert layer.states[0].beat == 0
+    assert layer.states[0].opacity == 0
+    assert layer.states[0].x == 0.1
+    assert layer.states[1].beat == 1
+
+
+def test_motion_provider_retries_transient_errors_without_leaking_bodies(monkeypatch):
+    import httpx
+
+    from server import video_providers
+
+    responses = iter(
+        [
+            httpx.Response(520),
+            httpx.Response(429, headers={"retry-after": "1"}),
+            httpx.Response(200),
+        ]
+    )
+    pauses = []
+    monkeypatch.setattr(video_providers.httpx, "post", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(video_providers.time, "sleep", pauses.append)
+    assert (
+        video_providers.reasoning_request(
+            "https://api.openai.com/v1/responses", motion=True
+        ).status_code
+        == 200
+    )
+    assert pauses == [15, 1]
+
+
+def test_repeated_capture_backgrounds_do_not_repeat_the_live_interaction():
+    plan = film()
+    decorative = plan.shots[0].model_copy(deep=True)
+    decorative.composition = "graphic"
+    plan.shots.insert(0, decorative)
+    fitted = director.constrain_geometry(plan)
+    assert fitted.shots[0].layers[0].kind == "product"
+    assert fitted.shots[1].layers[0].kind == "footage"
+    assert director.validate_evidence(fitted, sources(), 30) == []
+
+
+def test_switching_off_directed_motion_also_disables_its_graphic_audio():
+    clips = compile_timeline(
+        {"payload": {"scenes": sources()}},
+        [TimelineClip.model_validate(c) for c in director.compile_direction(film(), sources())],
+    )
+    for clip in clips:
+        clip["motion"] = "none"
+        clip["direction"]["layers"][0]["kind"] = "product"
+    assert motion_schedule(clips) == []
+    assert len(interaction_schedule(clips)) == 2
+    assert beat_map(clips, 6)["bpm"] == 150

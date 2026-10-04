@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -32,9 +33,30 @@ def capabilities() -> dict:
 def checked(response: httpx.Response, provider: str) -> httpx.Response:
     if response.status_code >= 400:
         # Do not return provider bodies: these can echo submitted credentials or audio.
-        raise ProviderError(
-            f"{provider} returned {response.status_code}. Check API access and credits."
+        detail = (
+            "The provider is temporarily unavailable. Retry shortly."
+            if response.status_code >= 500
+            else "Check API access, rate limits, and credits."
         )
+        raise ProviderError(f"{provider} returned {response.status_code}. {detail}")
+    return response
+
+
+def reasoning_request(url: str, *, motion: bool, **kwargs) -> httpx.Response:
+    """Short bounded backoff for transient limits on the larger motion requests."""
+    for attempt in range(3 if motion else 1):
+        response = httpx.post(url, **kwargs)
+        if (
+            (response.status_code != 429 and response.status_code < 500)
+            or not motion
+            or attempt == 2
+        ):
+            return response
+        try:
+            pause = float(response.headers.get("retry-after", 15 * (attempt + 1)))
+        except ValueError:
+            pause = 15 * (attempt + 1)
+        time.sleep(min(60, max(1, pause)))
     return response
 
 
@@ -66,8 +88,9 @@ def reason(
                 }
             )
         response = checked(
-            httpx.post(
+            reasoning_request(
                 "https://api.anthropic.com/v1/messages",
+                motion=motion,
                 headers={
                     "x-api-key": setting("ANTHROPIC_API_KEY"),
                     "anthropic-version": "2023-06-01",
@@ -97,15 +120,16 @@ def reason(
                 {"type": "input_image", "image_url": f"data:image/jpeg;base64,{screenshot}"}
             )
         response = checked(
-            httpx.post(
+            reasoning_request(
                 "https://api.openai.com/v1/responses",
+                motion=motion,
                 headers={"Authorization": f"Bearer {setting('OPENAI_API_KEY')}"},
                 json={
                     "model": setting("CUTROOM_MOTION_MODEL", "gpt-5.4")
                     if motion
                     else setting("OPENAI_MODEL", "gpt-4.1-mini"),
                     **(
-                        {"reasoning": {"effort": "medium"}}
+                        {"reasoning": {"effort": "low"}}
                         if motion and setting("CUTROOM_MOTION_MODEL", "gpt-5.4").startswith("gpt-5")
                         else {}
                     ),
@@ -113,7 +137,7 @@ def reason(
                     "input": [{"role": "user", "content": content}],
                     "store": False,
                     "text": {"format": {"type": "json_object"}},
-                    "max_output_tokens": max_tokens + (8000 if motion else 0),
+                    "max_output_tokens": max_tokens + (4000 if motion else 0),
                 },
                 timeout=240 if motion else 90,
             ),

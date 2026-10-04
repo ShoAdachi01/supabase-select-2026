@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { fitTextOnNLines } from '@remotion/layout-utils';
 import {
   AbsoluteFill,
   Img,
@@ -6,6 +7,9 @@ import {
   spring,
   useCurrentFrame,
   useVideoConfig,
+  delayRender,
+  continueRender,
+  cancelRender,
 } from 'remotion';
 import '@fontsource-variable/inter';
 import type { ShotProps } from './LaunchShot';
@@ -132,6 +136,19 @@ export function DirectedShot(props: ShotProps) {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
   const direction = props.direction!;
+  const [fontReady, setFontReady] = useState(false);
+  const [fontHandle] = useState(() => delayRender('Loading motion typography'));
+  useEffect(() => {
+    document.fonts
+      .load('600 100px "Inter Variable"')
+      .then(() => {
+        setFontReady(true);
+        continueRender(fontHandle);
+      })
+      .catch(cancelRender);
+    return () => continueRender(fontHandle);
+  }, [fontHandle]);
+  if (!fontReady) return null;
   // Reach the exact terminal geometry at the final encoded frame for reliable match cuts.
   const clock =
     frame === durationInFrames - 1 ? (direction.beats * fps * 60) / direction.bpm : frame;
@@ -161,7 +178,32 @@ export function DirectedShot(props: ShotProps) {
         const src = layer.kind.startsWith('detail-')
           ? props.details[Number(layer.kind.slice(-1))]
           : props.product;
-        const textStart = layer.states.find((state) => state.opacity > 0)?.beat || 0;
+        const firstVisible = layer.states.findIndex((state) => state.opacity > 0);
+        // Begin the type entrance WITH its opacity ramp, not after the ramp completes.
+        const textStart = layer.states[Math.max(0, firstVisible - 1)]?.beat || 0;
+        const naturalEntrance =
+          fps *
+          (layer.entrance === 'type'
+            ? layer.text.length * 0.035
+            : layer.entrance === 'words'
+              ? layer.text.split(/\s+/).length * 0.045 + 0.28
+              : 0.4);
+        const remaining = durationInFrames - (textStart * fps * 60) / direction.bpm;
+        const entranceFrames = Math.max(1, Math.min(naturalEntrance, remaining - fps * 0.8));
+        const typeFrame =
+          (Math.max(0, frame - (textStart * fps * 60) / direction.bpm) * naturalEntrance) /
+          entranceFrames;
+        const textLayout = isText
+          ? fitTextOnNLines({
+              text: layer.text,
+              fontFamily: 'Inter Variable',
+              fontWeight: layer.weight,
+              letterSpacing: '-.045em',
+              maxBoxWidth: Math.max(1, s.w * 1920 - 8),
+              maxLines: Math.max(1, Math.min(4, Math.floor((s.h * 1080) / (layer.size * 1.08)))),
+              maxFontSize: Math.min(layer.size, (s.h * 1080) / 1.08),
+            })
+          : null;
         return (
           <div key={layer.id} style={style}>
             {isText ? (
@@ -169,7 +211,7 @@ export function DirectedShot(props: ShotProps) {
                 data-motion-text={layer.id}
                 style={{
                   color: layer.color,
-                  fontSize: layer.size,
+                  fontSize: textLayout!.fontSize,
                   fontWeight: layer.weight,
                   textAlign: layer.align,
                   lineHeight: 1.08,
@@ -177,11 +219,15 @@ export function DirectedShot(props: ShotProps) {
                   overflowWrap: 'break-word',
                 }}
               >
-                <Type
-                  layer={layer}
-                  frame={Math.max(0, frame - (textStart * fps * 60) / direction.bpm)}
-                  fps={fps}
-                />
+                {textLayout!.lines.map((line, index) => (
+                  <div key={index} style={{ whiteSpace: 'nowrap' }}>
+                    <Type
+                      layer={{ ...layer, text: line }}
+                      frame={Math.max(0, typeFrame - index * 3)}
+                      fps={fps}
+                    />
+                  </div>
+                ))}
               </div>
             ) : layer.kind === 'shape' ? null : layer.kind === 'footage' && props.footage ? (
               <OffthreadVideo

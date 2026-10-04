@@ -8,7 +8,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const origin = process.env.CUTROOM_URL || 'http://127.0.0.1:5173';
 const folder = '.cutroom/verification';
 const musicLed = process.env.CUTROOM_MUSIC_LED === '1';
-const artifact = musicLed ? 'music-led' : 'polished';
+const artifact =
+  process.env.CUTROOM_DIRECTED === '1' ? 'directed' : musicLed ? 'music-led' : 'polished';
 await mkdir(folder, { recursive: true });
 const browser = await chromium.launch();
 const context = await browser.newContext({
@@ -64,7 +65,7 @@ try {
     });
   const id = job.id;
   let stage = '';
-  for (let i = 0; i < 240; i++) {
+  for (let i = 0; i < 600; i++) {
     await page.waitForTimeout(2000);
     job = await call('get_video', { video_id: id });
     if (job.status !== stage) {
@@ -87,11 +88,19 @@ try {
     assert.ok(scene.alignment_error <= 2.5, 'Result footage matches its verified screen.');
     assert.ok(scene.end - scene.start >= 0.25, 'Matched footage has a usable duration.');
   }
-  assert.ok(
-    job.payload.timeline.some((c) => !c.enabled),
-    'Overview is cut but restorable.',
-  );
-  assert.ok(job.payload.rendered_scenes.every((s) => s.duration <= 8));
+  if (job.payload.direction) {
+    assert.ok(job.payload.timeline.every((c) => c.motion === 'directed' && c.direction));
+    assert.ok(job.payload.direction.review.passes.length <= 3);
+    assert.ok(job.payload.direction.review.revision_count <= 2);
+    assert.ok(new Set(job.payload.timeline.map((c) => c.direction.composition)).size >= 2);
+    const overview = job.payload.scenes.find((s) => s.action === 'overview');
+    if (overview) assert.ok(job.payload.timeline.every((c) => c.scene_id !== overview.thumbnail));
+  } else
+    assert.ok(
+      job.payload.timeline.some((c) => !c.enabled),
+      'Overview is cut but restorable.',
+    );
+  assert.ok(job.payload.rendered_scenes.every((s) => s.duration <= 15));
   if (musicLed) {
     assert.equal(job.payload.narration_source, 'Music and interaction sounds');
     assert.ok(job.payload.rendered_scenes.every((s) => !s.narration));

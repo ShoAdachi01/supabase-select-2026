@@ -31,7 +31,7 @@ def interaction_schedule(scenes):
     for scene in scenes:
         if scene.get("kind", "browser") != "browser":
             continue
-        direction = scene.get("direction")
+        direction = scene.get("direction") if scene.get("motion") == "directed" else None
         if direction and not any(layer["kind"] == "footage" for layer in direction["layers"]):
             continue
         start, end = scene.get("start", 0), scene.get("end", 0)
@@ -148,13 +148,20 @@ def motion_schedule(scenes):
             "pan": 0,
         }
         for scene in scenes
-        if (direction := scene.get("direction"))
+        if scene.get("motion") == "directed" and (direction := scene.get("direction"))
         for hit in direction["hits"]
     ]
 
 
 def beat_map(scenes, duration):
-    bpm = next((s["direction"]["bpm"] for s in scenes if s.get("direction")), 150)
+    bpm = next(
+        (
+            s["direction"]["bpm"]
+            for s in scenes
+            if s.get("motion") == "directed" and s.get("direction")
+        ),
+        150,
+    )
     beats = [round(i * 60 / bpm, 6) for i in range(math.ceil(duration * bpm / 60))]
     return {
         "bpm": bpm,

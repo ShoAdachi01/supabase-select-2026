@@ -427,13 +427,22 @@ def finish_render(store: Store, job: dict, folder: Path):
                 payload["narration_source"] = "Custom voice" if custom else "OpenAI generated voice"
             audio_paths.append(audio)
 
+    last_motion_update = 0.0
+
     def progress(index, count):
+        nonlocal last_motion_update
         cancelled(store, job)
+        if not index:
+            if time.monotonic() - last_motion_update < 10:
+                return
+            last_motion_update = time.monotonic()
         event(
             store,
             job,
             "rendering",
-            f"Composing scene {index} of {count}: framing, zooms, captions, and audio.",
+            f"Composing scene {index} of {count}: framing, zooms, captions, and audio."
+            if index
+            else "Animating product details, typography, and camera movement.",
             72 + int(index / count * 20),
         )
 

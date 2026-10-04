@@ -3419,3 +3419,11 @@ svg {
   color: #85858e;
   font-size: 10px;
 }
+
+@media (min-width: 1000px) {
+  .editor-inspector {
+    max-height: calc(100vh - 125px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+}

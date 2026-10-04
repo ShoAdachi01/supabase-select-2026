@@ -53,6 +53,7 @@ def launch_clips(
     for clip, source in zip(originals, scenes, strict=True):
         clip["enabled"] = not (len(scenes) > 1 and source.get("action") == "overview")
         clip["camera"] = "push" if source.get("shot") == "result" else "wide"
+        clip["motion"] = "detail" if source.get("shot") == "result" else "none"
     scripts = plan.get("narration", [])
     if isinstance(scripts, list) and len(scripts) == len(originals):
         for clip, script in zip(originals, scripts, strict=True):
@@ -93,6 +94,7 @@ def launch_clips(
                 subtitle=str(copy.get("subtitle") or "")[:240],
                 narration=str(copy.get("narration") or narration)[:1000],
                 duration={"hook": 2.4, "benefit": 2, "outro": 2.4}[layout],
+                motion={"hook": "reveal", "benefit": "panels", "outro": "resolve"}[layout],
             ).model_dump(mode="json")
         )
     visible = [i for i, clip in enumerate(originals) if clip["enabled"]]
@@ -128,6 +130,8 @@ def compile_timeline(job: dict, clips: list[TimelineClip]) -> list[dict]:
                 end=source["start"] + end,
                 focus=deepcopy(source.get("focus", {"x": 640, "y": 360})),
                 thumbnail=source.get("thumbnail"),
+                details=deepcopy(source.get("details", [])),
+                viewport=deepcopy(source.get("viewport", {"width": 1280, "height": 720})),
             )
         elif clip.kind == "generated":
             asset = assets.get(str(clip.asset_id))

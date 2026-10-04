@@ -91,8 +91,9 @@ try {
   const state = await loginContext.storageState();
   const context = await browser.newContext({
     storageState: state,
-    viewport: { width: 1280, height: 720 },
-    recordVideo: { dir: input.directory, size: { width: 1280, height: 720 } },
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 2,
+    recordVideo: { dir: input.directory, size: { width: 1920, height: 1080 } },
     acceptDownloads: false,
     serviceWorkers: 'block',
   });
@@ -158,7 +159,9 @@ try {
         }),
     );
     const text = (await page.locator('body').innerText()).slice(0, 9000);
-    const screenshot = (await page.screenshot({ type: 'jpeg', quality: 65 })).toString('base64');
+    const screenshot = (
+      await page.screenshot({ type: 'jpeg', quality: 65, scale: 'css' })
+    ).toString('base64');
     return {
       type: 'observation',
       url: page.url(),
@@ -169,12 +172,52 @@ try {
     };
   }
   async function snapshot(scene) {
+    scene.viewport = { width: 1920, height: 1080 };
+    if (scene.action === 'overview' || scene.shot === 'result') scene.focus = { x: 960, y: 540 };
     scene.thumbnail = `scene-${scenes.length}.jpg`;
     await page.screenshot({
       path: resolve(input.directory, scene.thumbnail),
       type: 'jpeg',
       quality: 85,
     });
+    // Keep real, independently composable interface details alongside the recording.
+    const regions = await page.evaluate(() => {
+      const nodes = [
+        ...document.querySelectorAll(
+          'main section,main article,main table,main form,[role="dialog"],[role="tabpanel"],main .card,main .panel',
+        ),
+      ];
+      return nodes
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          const x = Math.max(0, r.x),
+            y = Math.max(0, r.y);
+          return {
+            x,
+            y,
+            width: Math.min(innerWidth, r.right) - x,
+            height: Math.min(innerHeight, r.bottom) - y,
+          };
+        })
+        .filter(
+          (r) =>
+            r.width >= 240 &&
+            r.height >= 120 &&
+            r.width * r.height < innerWidth * innerHeight * 0.72,
+        )
+        .sort((a, b) => b.width * b.height - a.width * a.height)
+        .filter(
+          (r, i, all) =>
+            !all.slice(0, i).some((p) => Math.abs(p.x - r.x) < 20 && Math.abs(p.y - r.y) < 20),
+        )
+        .slice(0, 3);
+    });
+    scene.details = [];
+    for (const [i, clip] of regions.entries()) {
+      const name = `detail-${scenes.length}-${i}.png`;
+      await page.screenshot({ path: resolve(input.directory, name), clip });
+      scene.details.push(name);
+    }
     scenes.push(scene);
   }
   const overviewStart = elapsed();

@@ -139,6 +139,38 @@ def original_music(path: Path, duration: float, style: str):
         out.writeframes(pcm.tobytes())
 
 
+def transition_cues(path: Path, scenes: list[dict]):
+    """Original short noise sweeps and soft impacts placed on actual edit boundaries."""
+    with wave.open(str(path)) as source:
+        rate = source.getframerate()
+        track = (
+            np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").astype(np.float64)
+            / 32768
+        )
+    for i, scene in enumerate(scenes):
+        if not scene.get("motion") or scene.get("motion") == "none":
+            continue
+        cue = max(0, scene.get("timeline_start", 0))
+        start = max(0, round((cue - 0.16) * rate))
+        count = min(round(0.3 * rate), len(track) - start)
+        if count <= 0:
+            continue
+        t = np.arange(count) / rate
+        noise = np.random.default_rng(i + 704).standard_normal(count)
+        smooth = np.convolve(noise, np.ones(11) / 11, mode="same")
+        sweep = 0.06 * smooth * np.sin(np.pi * np.arange(count) / count) ** 2
+        impact_time = np.maximum(0, t - 0.16)
+        impact = (
+            0.055 * np.sin(2 * np.pi * 130 * impact_time) * np.exp(-impact_time * 45) * (t >= 0.16)
+        )
+        track[start : start + count] += sweep + impact
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        output.writeframes((np.clip(track, -0.95, 0.95) * 32767).astype("<i2").tobytes())
+
+
 def render(
     directory: Path,
     raw: Path,
@@ -150,6 +182,14 @@ def render(
     progress=None,
 ) -> dict:
     clips, lengths = [], []
+    designed = {}
+    if any(s.get("motion", "none") != "none" for s in scenes):
+        from server.video_composition import prepare_compositions
+
+        checkpoint = (lambda: progress(0, len(scenes))) if progress else None
+        if checkpoint:
+            checkpoint()
+        designed = prepare_compositions(directory, raw, scenes, theme, audio_paths, checkpoint)
     for i, (scene, audio) in enumerate(zip(scenes, audio_paths, strict=True)):
         background, captions = directory / f"frame-{i}.png", directory / f"caption-{i}.png"
         Image.new("RGB", (1920, 1080), "black").save(background)
@@ -175,7 +215,11 @@ def render(
         start = max(0, scene.get("start", 0))
         recorded = max(0.4, scene.get("end", duration) - start)
         focus = scene.get("focus", {"x": 640, "y": 360})
-        fx, fy = min(1, max(0, focus["x"] / 1280)), min(1, max(0, focus["y"] / 720))
+        viewport = scene.get("viewport", {"width": 1280, "height": 720})
+        fx, fy = (
+            min(1, max(0, focus["x"] / viewport["width"])),
+            min(1, max(0, focus["y"] / viewport["height"])),
+        )
         # Compress long action recordings into the edit budget. Short takes retain real-time motion.
         speed = max(1, recorded / duration)
         zoom = (
@@ -193,7 +237,11 @@ def render(
             f"[3:a]apad,atrim=duration={duration},afade=t=in:d=0.05,afade=t=out:st={max(0, duration - 0.15)}:d=0.15[a]"
         )
         source = raw
-        if scene.get("kind") == "title":
+        if i in designed:
+            source = designed[i]
+            start, recorded = 0, duration
+            scene["thumbnail"] = f"edit-{i}.jpg"
+        elif scene.get("kind") == "title":
             from server.video_motion import motion_source
 
             # Match the exact first frame of the next visible product shot, including its trim.
@@ -223,7 +271,7 @@ def render(
             )
             scene["thumbnail"] = f"edit-{i}.jpg"
             animation_title(captions, scene.get("headline", ""), scene.get("subtitle", ""))
-        if scene.get("kind") in ("title", "generated"):
+        if scene.get("kind") in ("title", "generated") or i in designed:
             filters = (
                 f"[1:v]fps=30,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
                 f"tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration},setpts=PTS-STARTPTS[v];"
@@ -356,6 +404,8 @@ def render(
     if music != "none":
         bed = directory / "music.wav"
         original_music(bed, total + 0.5, music)
+        if designed:
+            transition_cues(bed, scenes)
         ffmpeg(
             "-i",
             str(joined),

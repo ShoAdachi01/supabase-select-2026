@@ -21,6 +21,7 @@ export type TimelineClip = {
   layout: 'hook' | 'benefit' | 'outro';
   duration: number;
   camera?: 'wide' | 'push';
+  motion?: 'none' | 'reveal' | 'panels' | 'detail' | 'resolve';
   trim_start: number;
   trim_end?: number | null;
   enabled: boolean;

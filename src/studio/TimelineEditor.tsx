@@ -27,6 +27,7 @@ export function newTitle(layout: TimelineClip['layout'] = 'hook'): TimelineClip 
     enabled: true,
     transition: 'cut',
     camera: 'wide',
+    motion: layout === 'outro' ? 'resolve' : layout === 'benefit' ? 'panels' : 'reveal',
   };
 }
 
@@ -35,6 +36,7 @@ export function initialClips(scenes: Scene[]): TimelineClip[] {
     ...newTitle(),
     id: `take-${i}`,
     kind: 'browser',
+    motion: 'none',
     scene_id: s.thumbnail || `capture-${i}`,
     label: s.label,
     narration: s.narration,
@@ -229,7 +231,29 @@ export default function TimelineEditor({
               onChange={(e) => patch({ duration: Number(e.target.value) })}
             />
           </label>
-          {clip.kind === 'browser' && (
+          {clip.kind !== 'generated' && (
+            <label>
+              Motion treatment
+              <select
+                aria-label="Motion treatment"
+                value={clip.motion || 'none'}
+                disabled={disabled}
+                onChange={(e) => patch({ motion: e.target.value as TimelineClip['motion'] })}
+              >
+                <option value="none">Original footage / classic title</option>
+                {clip.kind === 'browser' ? (
+                  <option value="detail">Detail → overview</option>
+                ) : (
+                  <>
+                    <option value="reveal">Continuous product reveal</option>
+                    <option value="panels">Layered product details</option>
+                    <option value="resolve">Kinetic closing line</option>
+                  </>
+                )}
+              </select>
+            </label>
+          )}
+          {clip.kind === 'browser' && (!clip.motion || clip.motion === 'none') && (
             <label>
               Camera
               <select

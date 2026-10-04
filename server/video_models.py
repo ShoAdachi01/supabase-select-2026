@@ -43,6 +43,7 @@ class TimelineClip(BaseModel):
     layout: Literal["hook", "benefit", "outro"] = "hook"
     duration: float = Field(default=4, ge=1, le=15)
     camera: Literal["wide", "push"] = "wide"
+    motion: Literal["none", "reveal", "panels", "detail", "resolve"] = "none"
     trim_start: float = Field(default=0, ge=0)
     trim_end: float | None = Field(default=None, ge=0)
     enabled: bool = True

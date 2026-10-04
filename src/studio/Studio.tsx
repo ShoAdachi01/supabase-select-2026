@@ -144,8 +144,8 @@ export default function Studio() {
   const [animationPrompt, setAnimationPrompt] = useState(
     'Ivory background, coral and sage geometric panels gently organizing into one elegant frame. Soft studio lighting, precise smooth motion. End on a clean ivory background for a dissolve into the product.',
   );
-  const [voice, setVoice] = useState('marin');
-  const [music, setMusic] = useState<'ambient' | 'momentum' | 'none'>('ambient');
+  const [voice, setVoice] = useState('none');
+  const [music, setMusic] = useState<'ambient' | 'momentum' | 'none'>('momentum');
   const [theme, setTheme] = useState<'midnight' | 'paper'>('midnight');
   const [editorTab, setEditorTab] = useState<'script' | 'style' | 'animation' | 'activity'>(
     'script',
@@ -376,6 +376,10 @@ export default function Studio() {
     }
   }
   async function previewVoice(id: string, text?: string) {
+    if (id === 'none') {
+      setNotice('This style uses music and interaction sounds, with no voiceover.');
+      return;
+    }
     if (!features.narration && !id.includes('-')) {
       setNotice('Connect an OpenAI API key to hear the stock voices.');
       return;

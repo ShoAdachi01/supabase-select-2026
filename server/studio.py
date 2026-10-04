@@ -48,7 +48,7 @@ from server.video_service import (
     resolve_voice,
     voices,
 )
-from server.video_timeline import launch_clips, launch_prompt
+from server.video_timeline import launch_clips, launch_prompt, music_launch_plan
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGNING_KEY = setting("CUTROOM_SIGNING_KEY", secrets.token_hex(32)).encode()
@@ -200,6 +200,8 @@ class VoicePreview(BaseModel):
 
 @app.post("/api/voices/preview")
 def preview_voice(body: VoicePreview, store: Store = Depends(workspace)):
+    if body.voice == "none":
+        raise HTTPException(400, "This style has no spoken voice preview.")
     custom = resolve_voice(store, body.voice)
     folder = VIDEO_DIR / str(uuid.UUID(store.user_id)) / "previews"
     folder.mkdir(parents=True, exist_ok=True)
@@ -300,18 +302,28 @@ def launch_plan(video_id: uuid.UUID, store: Store = Depends(workspace)):
     plan = None
     if capabilities()["reasoning"]:
         try:
-            plan = reason(launch_prompt(job["title"], job["payload"]["brief"], scenes))
+            plan = (
+                music_launch_plan(
+                    job["title"], job["payload"]["brief"], scenes, directory(store, str(video_id))
+                )
+                if job["payload"].get("voice") == "none"
+                else reason(launch_prompt(job["title"], job["payload"]["brief"], scenes))
+            )
         except (ValueError, httpx.HTTPError):
             raise HTTPException(
                 503, "Launch copy could not be planned. Add an animated title manually."
             ) from None
-    return {"clips": launch_clips(scenes, job["title"], plan)}
+    return {
+        "clips": launch_clips(
+            scenes, job["title"], plan, music_led=job["payload"].get("voice") == "none"
+        )
+    }
 
 
 TOOLS = [
     (
         "create_product_video",
-        "Create a launch film from a deployed URL and feature brief: full-screen product footage, short narration, animated reveals, clean cuts and music. Defaults to a 30-second target. Optional demo credentials are transient. Returns a video ID; poll get_video. demo=true films our sample app only.",
+        "Create a launch film from a deployed URL and feature brief. Defaults to voice=none: music-led footage with real cursor interactions, synchronized click/typing sounds, short feature labels and animated reveals. Select a stock or custom voice for narration. Defaults to a 30-second target. Optional demo credentials are transient. Returns a video ID; poll get_video. demo=true films our sample app only.",
         VideoInput,
     ),
     (

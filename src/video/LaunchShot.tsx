@@ -12,6 +12,7 @@ export type ShotProps = {
   details: string[];
   footage?: string;
   frames: number;
+  interactive?: boolean;
   focus?: { x: number; y: number };
 };
 
@@ -104,7 +105,7 @@ export function LaunchShot(props: ShotProps) {
   if (props.preset === 'detail') {
     const move = segment(t, 0.04, 0.34);
     const release = segment(t, 0.7, 1);
-    const zoom = 1 + 0.62 * move * (1 - release);
+    const zoom = 1 + (props.interactive ? 0.18 : 0.62) * move * (1 - release);
     const travel = move * (1 - release);
     const offset = (center: number, size: number) =>
       Math.max(
@@ -128,6 +129,28 @@ export function LaunchShot(props: ShotProps) {
             pointerEvents: 'none',
           }}
         />
+        {props.interactive && props.headline && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 72,
+              bottom: 62,
+              maxWidth: 1000,
+              fontFamily: 'Inter Variable, sans-serif',
+              color: '#fff',
+              background: '#101218ee',
+              borderRadius: 18,
+              padding: '20px 28px',
+              fontSize: 34,
+              fontWeight: 550,
+              letterSpacing: '-.035em',
+              opacity: segment(t, 0.12, 0.23) * (1 - segment(t, 0.76, 0.96)),
+              transform: `translateY(${18 * (1 - segment(t, 0.12, 0.23))}px)`,
+            }}
+          >
+            {props.headline}
+          </div>
+        )}
       </AbsoluteFill>
     );
   }

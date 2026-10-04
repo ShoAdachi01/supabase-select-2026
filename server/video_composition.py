@@ -82,13 +82,20 @@ def prepare_compositions(
             if scene.get("kind", "browser") == "browser"
             else next((s for s in candidates if s.get("kind", "browser") == "browser"), None)
         )
+        source_at_end = False
+        if preset == "panels" and source and source.get("interactions"):
+            preceding = next(
+                (s for s in reversed(scenes[:i]) if s.get("kind", "browser") == "browser"), None
+            )
+            if preceding:
+                source, source_at_end = preceding, True
         if not source:
             # Text-only edits still render; no fabricated product UI is substituted.
             source = {"start": 0, "end": 1}
         product = folder / f"motion-product-{i}.png"
         ffmpeg(
             "-ss",
-            str(max(0, source.get("start", 0))),
+            str(max(0, source.get("end", 0) - 1 / 30 if source_at_end else source.get("start", 0))),
             "-i",
             str(raw),
             "-frames:v",
@@ -141,6 +148,7 @@ def prepare_compositions(
                 "headline": scene.get("headline") or scene.get("label", ""),
                 "subtitle": scene.get("subtitle", ""),
                 "frames": round(duration * 30),
+                "interactive": bool(source.get("interactions")),
                 "product": product.name,
                 "details": details,
                 "footage": footage.name if footage else None,

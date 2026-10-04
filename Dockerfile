@@ -19,7 +19,7 @@ COPY server ./server
 COPY package.json package-lock.json ./
 COPY src/video ./src/video
 COPY public/sample ./public/sample
-COPY scripts/serve.py scripts/video_browser.mjs scripts/video_network.mjs scripts/render_motion.mjs ./scripts/
+COPY scripts/serve.py scripts/video_browser.mjs scripts/video_network.mjs scripts/video_capture.mjs scripts/render_motion.mjs ./scripts/
 COPY --from=frontend /app/dist ./dist
 USER cutroom
 EXPOSE 8000

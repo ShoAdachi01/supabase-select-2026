@@ -19,8 +19,12 @@ class VideoInput(BaseModel):
     title: str = Field(default="Product walkthrough", min_length=1, max_length=100)
     brief: str = Field(min_length=8, max_length=3000)
     credentials: DemoCredentials | None = None
-    voice: str = Field(default="marin", max_length=100)
-    music: Literal["ambient", "momentum", "none"] = "ambient"
+    voice: str = Field(
+        default="none",
+        max_length=100,
+        description="Use none for a music-led launch film without narration.",
+    )
+    music: Literal["ambient", "momentum", "none"] = "momentum"
     theme: Literal["midnight", "paper"] = "midnight"
     duration: Literal[30, 60, 90] = 30
     demo: bool = False

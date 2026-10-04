@@ -1,6 +1,6 @@
 # Cutroom
 
-**Your agent’s product video studio.** Give it a deployed app URL, a feature brief, and optional demo login credentials. Get an editable, narrated launch film: animated reveals, full-screen product footage, concise narration, clean cuts, and background music.
+**Your agent’s product video studio.** Give it a deployed app URL, a feature brief, and optional demo login credentials. Get a launch film with animated reveals, real product interactions, clean cuts, and background music. New films default to music and synchronized interaction sounds; narration is optional.
 
 The web app and authenticated MCP connector use the same jobs, voices, storyboard, and exports. This is a working hackathon prototype, not a billing-enabled production service.
 
@@ -40,7 +40,7 @@ Open **http://127.0.0.1:5173**. The browser creates an anonymous Supabase worksp
 
 1. Select **Create a video** and provide the deployed app URL.
 2. Describe the feature and the outcome to show. Add an email/username, password, and optionally a separate login URL for a demo account.
-3. Choose a narrator, target duration, background music, and visual style.
+3. Choose music with interaction sounds (the default), or a narrator, plus target duration and visual style.
 4. The director inspects visible controls and screenshots, selects bounded browser actions, and captures actual interactions. Login happens in an unrecorded browser; its session transfers to the recording context.
 5. The script is generated from captured scenes and visible app text. Launch scripts use short benefit-focused lines. Routine navigation can be filmed as a ready destination; feature interactions retain their cursor movement. Model thinking time is cut out.
 6. Review the film and its storyboard. Choose a scene in **Script**, edit its spoken words, and use **Hear these words** to preview the actual narration. Cut/restore, duplicate, reorder, and trim captured scenes. Edit title headlines and supporting lines independently of the voiceover.
@@ -52,7 +52,9 @@ New launch plans use frame-driven **Remotion** compositions: continuous product 
 
 The worker renders reviewed compositions rather than executing generated code. It serves only the current job’s allowlisted assets on a temporary loopback server, bundles fonts locally, and caches the compiled composition plus unchanged rendered shots. Cancellation stops the compositor process group. Original captures, credentials, and unrelated files are not copied into the composition bundle. Remotion is source-available with [license conditions](https://www.remotion.dev/docs/license/faq); evaluate the applicable license before commercial scaling.
 
-The renderer uses original synthesized instrumental beds, automatically mixed and ducked under speech. Voice and music are loudness-normalized separately, with gentle ducking and a final peak limiter; the momentum bed includes bass and percussion. Motion compositions add restrained, original sound cues on their actual edit boundaries. It does not require a music-generation API or external music assets. The actual duration depends on shot budgets, generated speech, and the number of captured scenes. Edited long narration is preserved and can exceed the target; the editor flags likely overruns.
+Music-led creation (`voice: "none"`, `music: "momentum"`) records short directed takes using timestamped Chromium frames. Cursor moves, clicks, and individual keystrokes share the recording clock; time spent waiting for the director is omitted. Only event types, positions and timestamps are retained in the sound schedule, not typed values. The first 30-second draft uses at most four directed actions, brief feature labels, and cuts on 0.8-second musical subdivisions. Real typing can extend a shot. A softer camera keeps the interaction visible, and layers use the preceding result before returning to the next action. This mode skips speech generation entirely.
+
+The music-led mix uses an original stereo pluck/bass/percussion score with an intro and closing fade. Click and key sounds follow actual events through trims, speed changes and shot offsets; `music: "none"` retains those interaction sounds. Narrated films retain the existing instrumental beds and speech ducking. All sound is synthesized locally with no music-generation API or third-party samples. These are curated procedural arrangements, not automatically selected commercial-quality tracks. The actual duration depends on shot budgets, generated speech, and the number of captured scenes.
 
 The **sample app** is Meridian, a fictional project workspace bundled in `public/sample/`. With API keys it uses the real director and speech pipeline. Without reasoning keys, the sample uses a deterministic four-action path. On macOS without a speech key it uses the local system narrator; on other systems the unconfigured sample is silent. These fallbacks are labelled. They are not evidence of autonomous execution on an arbitrary app.
 
@@ -122,6 +124,8 @@ Example prompt:
 - `server/video_providers.py`: OpenAI, Claude, and ElevenLabs adapters.
 - `server/video_render.py`: FFmpeg composition, captions, narration alignment, and synthesized music.
 - `server/video_timeline.py`: immutable source references, trim validation, cut/order edits, launch drafts.
+- `scripts/video_capture.mjs`, `server/video_capture.py`: timestamped directed takes and source encoding.
+- `server/video_sound.py`: stereo music, event retiming, and interaction effects.
 - `server/video_motion.py`: original typography and product-reveal animation renderer.
 - `src/video/`: reviewed Remotion compositions, typography, camera movement, and product-layer animation.
 - `server/video_composition.py`, `scripts/render_motion.mjs`: private asset preparation, cached rendering, and cancellation.
@@ -153,6 +157,8 @@ npm run test:editing   # Run after test:video:e2e; real UI word edits, cuts, tri
 The API and Vite servers must be running for integration checks. End-to-end verification uses configured model/speech credits when available and writes an actual film and screenshots under `.cutroom/verification/`. Without keys it uses the labelled sample fallbacks. Existing Trace browser/stack checks apply only to the prior Trace app.
 
 To reproduce Cutroom’s own directed launch film, first run `test:video:e2e` and `test:launch` to create the private verification workspace and its sample film. Run `node scripts/capture_studio_launch.mjs`, then `.venv/bin/python -m scripts.render_studio_launch`. This records the actual local UI and renders a narrated 1080p film under `.cutroom/verification/cutroom-launch/film.mp4`. Narration uses OpenAI credits. Pass `--reuse-audio` to the render command only when the spoken copy is unchanged. This is a scripted capture of our studio, not a test of autonomous URL-only navigation.
+
+Run `CUTROOM_MUSIC_LED=1 npm run test:launch` for a full authenticated MCP music-led capture/export. Run `npm run test:interactions` to verify real browser typing/clicks, omission of director idle time, encoded result timing, source color range, and sound onset. Private review artifacts remain in `.cutroom/verification`.
 
 For the two short motion treatments, run `node scripts/capture_motion_preview.mjs` then `.venv/bin/python -m scripts.render_motion_previews`. These use the same actual editor capture, product-element screenshots, and narration to compare the reveal and layered treatments under `.cutroom/verification/motion-v2/{reveal,panels}/film.mp4`. This is a directed comparison through the normal rendering engine. A 1–5 opening-variation selector, repository ingestion, and a standalone customer CLI are not implemented yet; URL input and the existing authenticated MCP remain the supported entry points.
 

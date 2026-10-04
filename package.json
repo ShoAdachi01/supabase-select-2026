@@ -21,7 +21,8 @@
     "test:mcp": "node scripts/verify_video_mcp.mjs",
     "lint": ".venv/bin/ruff check server scripts tests && prettier --check src api vercel.ts tests/browser scripts/*.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json",
     "format": ".venv/bin/ruff format server scripts tests && prettier --write src api vercel.ts tests/browser scripts/*.mjs package.json tsconfig.json vite.config.ts playwright.config.ts index.html .prettierrc.json",
-    "test:launch": "node scripts/verify_video_launch.mjs"
+    "test:launch": "node scripts/verify_video_launch.mjs",
+    "test:interactions": "node scripts/verify_directed_capture.mjs && .venv/bin/python -m scripts.verify_directed_capture"
   },
   "dependencies": {
     "@fontsource-variable/inter": "5.3.0",

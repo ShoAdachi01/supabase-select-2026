@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from server.video_capture import encode_directed_capture
+from server.video_render import ffmpeg, render
 from server.video_sound import interaction_audio, interaction_schedule, launch_music
 from server.video_timeline import launch_clips, music_launch_plan
 
@@ -113,3 +114,25 @@ def test_copy_director_receives_real_screens_and_rejects_unsafe_paths(tmp_path, 
     with pytest.raises(ValueError, match="Invalid screen evidence"):
         music_launch_plan("Product", "Show project tracking", scenes, tmp_path)
     assert len(calls) == 1
+
+
+def test_narrated_export_keeps_voice_audible_over_music(tmp_path):
+    raw, speech = tmp_path / "raw.webm", tmp_path / "speech.wav"
+    ffmpeg("-f", "lavfi", "-i", "color=c=blue:s=320x180:r=30:d=1", "-c:v", "libvpx", str(raw))
+    ffmpeg("-f", "lavfi", "-i", "sine=frequency=1000:duration=0.7:sample_rate=24000", str(speech))
+    render(
+        tmp_path,
+        raw,
+        [{"start": 0, "end": 1, "duration": 1, "narration": "Voice remains."}],
+        "Product",
+        "paper",
+        "momentum",
+        [speech],
+    )
+    decoded = tmp_path / "check.wav"
+    ffmpeg("-i", str(tmp_path / "film.mp4"), "-ac", "1", "-ar", "24000", str(decoded))
+    with wave.open(str(decoded)) as source:
+        samples = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2")
+    spectrum = np.abs(np.fft.rfft(samples[2400:12000]))
+    frequency = np.fft.rfftfreq(9600, 1 / 24000)[np.argmax(spectrum)]
+    assert frequency == pytest.approx(1000, abs=5)

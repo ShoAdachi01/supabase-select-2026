@@ -231,3 +231,32 @@ def test_renderer_exports_real_1080p_mp4_with_music(tmp_path):
     assert result["bytes"] > 1000
     assert (tmp_path / "music.wav").exists()
     assert scenes[0]["duration"] == result["duration_seconds"]
+
+
+def test_failed_animation_generation_preserves_existing_film_and_export(store, monkeypatch):
+    from server import video_generation
+    from server.video_models import GenerateClipInput
+
+    job = video_service.create_video(
+        store, VideoInput(url="https://example.com", brief="Show the project board.", demo=True)
+    )
+    job["status"] = "complete"
+    job["payload"]["export"] = {"bytes": 1234}
+    store.save("video_jobs", job)
+    folder = video_service.directory(store, job["id"])
+    folder.mkdir(parents=True)
+    (folder / "film.mp4").write_bytes(b"existing finished film")
+    monkeypatch.setattr(video_generation, "generation_capabilities", lambda: {"veo": True})
+
+    def quota_failure(*args):
+        raise ValueError("Veo generation quota is unavailable.")
+
+    monkeypatch.setattr(video_generation, "generate_file", quota_failure)
+    body = GenerateClipInput(provider="veo", prompt="An original geometric launch animation.")
+    pending, asset_id = video_service.prepare_animation(store, job["id"], body)
+    video_service.generate_animation(store, pending, body, asset_id)
+    after = store.get("video_jobs", job["id"])
+    assert after["status"] == "complete"
+    assert after["payload"]["export"] == {"bytes": 1234}
+    assert after["payload"]["assets"][0]["status"] == "failed"
+    assert (folder / "film.mp4").read_bytes() == b"existing finished film"

@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from server.network import public_target
 from server.store import LOCAL_DEMO, Store
+from server.video_alignment import align_result_shots
 from server.video_models import (
     STOCK_VOICES,
     GenerateClipInput,
@@ -292,11 +293,12 @@ def film(store: Store, job: dict, body: VideoInput):
             if not completed:
                 raise ValueError("Recording exceeded its time limit. Try a shorter feature brief.")
             scenes = completed["scenes"]
-            job["payload"]["scenes"] = [{**scene, "narration": ""} for scene in scenes]
             raw = Path(completed["video"]).resolve()
             if raw.parent != folder:
                 raise ValueError("Invalid browser artifact.")
             (folder / "raw.webm").write_bytes(raw.read_bytes())
+            align_result_shots(folder / "raw.webm", folder, scenes)
+            job["payload"]["scenes"] = [{**scene, "narration": ""} for scene in scenes]
             event(
                 store,
                 job,
@@ -427,13 +429,22 @@ def finish_render(store: Store, job: dict, folder: Path):
                 payload["narration_source"] = "Custom voice" if custom else "OpenAI generated voice"
             audio_paths.append(audio)
 
+    last_motion_update = 0.0
+
     def progress(index, count):
+        nonlocal last_motion_update
         cancelled(store, job)
+        if not index:
+            if time.monotonic() - last_motion_update < 10:
+                return
+            last_motion_update = time.monotonic()
         event(
             store,
             job,
             "rendering",
-            f"Composing scene {index} of {count}: framing, zooms, captions, and audio.",
+            f"Composing scene {index} of {count}: framing, zooms, captions, and audio."
+            if index
+            else "Animating product details, typography, and camera movement.",
             72 + int(index / count * 20),
         )
 

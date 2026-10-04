@@ -2,7 +2,8 @@ FROM node:22-bookworm-slim AS frontend
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY tsconfig.json vite.config.ts index.html ./
+COPY tsconfig.json vite.config.ts vercel.ts index.html ./
+COPY api ./api
 COPY src ./src
 COPY public ./public
 RUN npm run build
@@ -15,8 +16,10 @@ COPY --from=frontend /usr/local/bin/node /usr/local/bin/node
 COPY --from=frontend /app/node_modules ./node_modules
 RUN pip install --no-cache-dir -r requirements.lock && node node_modules/playwright/cli.js install --with-deps chromium && useradd --create-home cutroom && mkdir /data && chown cutroom /data
 COPY server ./server
+COPY package.json package-lock.json ./
+COPY src/video ./src/video
 COPY public/sample ./public/sample
-COPY scripts/serve.py scripts/video_browser.mjs scripts/video_network.mjs ./scripts/
+COPY scripts/serve.py scripts/video_browser.mjs scripts/video_network.mjs scripts/render_motion.mjs ./scripts/
 COPY --from=frontend /app/dist ./dist
 USER cutroom
 EXPOSE 8000

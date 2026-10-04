@@ -91,8 +91,9 @@ try {
   const state = await loginContext.storageState();
   const context = await browser.newContext({
     storageState: state,
-    viewport: { width: 1280, height: 720 },
-    recordVideo: { dir: input.directory, size: { width: 1280, height: 720 } },
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 2,
+    recordVideo: { dir: input.directory, size: { width: 1920, height: 1080 } },
     acceptDownloads: false,
     serviceWorkers: 'block',
   });
@@ -158,7 +159,9 @@ try {
         }),
     );
     const text = (await page.locator('body').innerText()).slice(0, 9000);
-    const screenshot = (await page.screenshot({ type: 'jpeg', quality: 65 })).toString('base64');
+    const screenshot = (
+      await page.screenshot({ type: 'jpeg', quality: 65, scale: 'css' })
+    ).toString('base64');
     return {
       type: 'observation',
       url: page.url(),
@@ -169,12 +172,75 @@ try {
     };
   }
   async function snapshot(scene) {
+    scene.viewport = { width: 1920, height: 1080 };
+    if (scene.action === 'overview' || scene.shot === 'result') scene.focus = { x: 960, y: 540 };
     scene.thumbnail = `scene-${scenes.length}.jpg`;
     await page.screenshot({
       path: resolve(input.directory, scene.thumbnail),
       type: 'jpeg',
       quality: 85,
     });
+    // Keep real, independently composable interface details alongside the recording.
+    const regions = await page.evaluate(() => {
+      const root = document.querySelector('main,[role="main"],.main') || document.body;
+      const nodes = [
+        ...root.querySelectorAll('section,article,table,form,div,button,[role="tabpanel"]'),
+      ];
+      const candidates = nodes
+        .flatMap((el) => {
+          if (el.closest('nav,aside,[role="navigation"]')) return [];
+          const style = getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          const x = Math.max(0, r.x),
+            y = Math.max(0, r.y);
+          const width = Math.min(innerWidth, r.right) - x;
+          const height = Math.min(innerHeight, r.bottom) - y;
+          const text = el.textContent.trim();
+          const framed =
+            parseFloat(style.borderRadius) >= 6 ||
+            parseFloat(style.borderTopWidth) > 0 ||
+            el.matches('table,form,article,section') ||
+            el.querySelector('svg,canvas');
+          if (
+            !framed ||
+            style.visibility === 'hidden' ||
+            style.display === 'none' ||
+            text.length < 8 ||
+            width < 180 ||
+            height < 90 ||
+            width / height > 5 ||
+            width * height > innerWidth * innerHeight * 0.38
+          )
+            return [];
+          return [{ x, y, width, height }];
+        })
+        .sort((a, b) => b.width * b.height - a.width * a.height);
+      const selected = [];
+      for (const r of candidates) {
+        const overlaps = selected.some((p) => {
+          const area =
+            Math.max(0, Math.min(p.x + p.width, r.x + r.width) - Math.max(p.x, r.x)) *
+            Math.max(0, Math.min(p.y + p.height, r.y + r.height) - Math.max(p.y, r.y));
+          return area > Math.min(p.width * p.height, r.width * r.height) * 0.35;
+        });
+        if (!overlaps) selected.push(r);
+        if (selected.length === 3) break;
+      }
+      return selected;
+    });
+    if (regions.length && (scene.action === 'overview' || scene.shot === 'result')) {
+      const left = Math.min(...regions.map((r) => r.x));
+      const right = Math.max(...regions.map((r) => r.x + r.width));
+      const top = Math.min(...regions.map((r) => r.y));
+      const bottom = Math.max(...regions.map((r) => r.y + r.height));
+      scene.focus = { x: (left + right) / 2, y: (top + bottom) / 2 };
+    }
+    scene.details = [];
+    for (const [i, clip] of regions.entries()) {
+      const name = `detail-${scenes.length}-${i}.png`;
+      await page.screenshot({ path: resolve(input.directory, name), clip });
+      scene.details.push(name);
+    }
     scenes.push(scene);
   }
   const overviewStart = elapsed();

@@ -79,6 +79,10 @@ try {
     job.payload.scenes.some((s) => s.shot === 'result'),
     'Navigation is removed from at least one shot.',
   );
+  for (const scene of job.payload.scenes.filter((s) => s.shot === 'result')) {
+    assert.ok(scene.alignment_error <= 2.5, 'Result footage matches its verified screen.');
+    assert.ok(scene.end - scene.start >= 0.25, 'Matched footage has a usable duration.');
+  }
   assert.ok(
     job.payload.timeline.some((c) => !c.enabled),
     'Overview is cut but restorable.',

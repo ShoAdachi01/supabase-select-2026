@@ -8,7 +8,7 @@ The web app and authenticated MCP connector use the same jobs, voices, storyboar
 
 ## Run locally
 
-Requires Node 20+, Python 3.12+, Docker, and Supabase CLI.
+Requires Node 22+, Python 3.12+, Docker, and Supabase CLI.
 
 ```sh
 npm ci
@@ -48,7 +48,11 @@ Open **http://127.0.0.1:5173**. The browser creates an anonymous Supabase worksp
 
 The default **Launch film** targets 30 seconds, with 2–4-second shots, brief animated typography, full-screen product footage, and clean cuts. Opening and spotlight reveals expand the exact first frame of the following trimmed shot to fill the canvas. The redundant overview is cut but can be restored. Typography is silent by default, reserving narration for product footage. **Product walkthrough** keeps only browser footage. In existing projects, **Add launch sequence** drafts opening, benefit, and closing copy and shortens narration from the verified captured scenes. Every line remains editable. Cuts are non-destructive: original captures remain intact, and a cut scene can be restored.
 
-The renderer uses original synthesized instrumental beds, automatically mixed and ducked under speech. Voice and music are loudness-normalized separately, with gentle ducking and a final peak limiter; the momentum bed includes bass and percussion. It does not require a music-generation API or external music assets. The actual duration depends on shot budgets, generated speech, and the number of captured scenes. Edited long narration is preserved and can exceed the target; the editor flags likely overruns.
+New launch plans use frame-driven **Remotion** compositions: continuous product reveals, layered interface details, a closer camera that returns to the overview, and masked word reveals. Browser capture records at 1080p and saves higher-resolution screenshots of visible interface regions. When fewer than two verified regions are available, the layered treatment uses a complete-screen reveal instead. Result shots are matched against their captured screen evidence to correct recording-clock drift before scripting; unverifiable results stop the take for review. In **Script → Motion treatment**, choose or remove a treatment for each shot; MCP accepts the same `motion` field (`none`, `reveal`, `panels`, `detail`, `resolve`). Old saved timelines keep their original rendering until edited. Long speech still extends its shot; the composition is retimed with it.
+
+The worker renders reviewed compositions rather than executing generated code. It serves only the current job’s allowlisted assets on a temporary loopback server, bundles fonts locally, and caches the compiled composition plus unchanged rendered shots. Cancellation stops the compositor process group. Original captures, credentials, and unrelated files are not copied into the composition bundle. Remotion is source-available with [license conditions](https://www.remotion.dev/docs/license/faq); evaluate the applicable license before commercial scaling.
+
+The renderer uses original synthesized instrumental beds, automatically mixed and ducked under speech. Voice and music are loudness-normalized separately, with gentle ducking and a final peak limiter; the momentum bed includes bass and percussion. Motion compositions add restrained, original sound cues on their actual edit boundaries. It does not require a music-generation API or external music assets. The actual duration depends on shot budgets, generated speech, and the number of captured scenes. Edited long narration is preserved and can exceed the target; the editor flags likely overruns.
 
 The **sample app** is Meridian, a fictional project workspace bundled in `public/sample/`. With API keys it uses the real director and speech pipeline. Without reasoning keys, the sample uses a deterministic four-action path. On macOS without a speech key it uses the local system narrator; on other systems the unconfigured sample is silent. These fallbacks are labelled. They are not evidence of autonomous execution on an arbitrary app.
 
@@ -69,7 +73,7 @@ Keys stay on the server. Provider configuration is reread for each request so lo
 | Stock narration | OpenAI `gpt-4o-mini-tts` |
 | Custom voice cloning | Optional ElevenLabs |
 | Background music | Original local NumPy synthesis; FFmpeg ducks it under speech |
-| Editable motion graphics | Original frame-by-frame Pillow renderer: animated typography, real product reveal, spotlight, closing card |
+| Editable motion graphics | Remotion/React compositions with real product assets; legacy Pillow titles remain supported |
 | Generated visual backgrounds | Optional Google Veo 3.1 Fast through Gemini API, or OpenAI Sora 2 |
 | Composition and transitions | FFmpeg, including synchronized video dissolves and audio crossfades |
 | Workspace and private exports | Supabase Auth, Postgres/RLS, Storage |
@@ -78,7 +82,7 @@ Built-in motion graphics work without a video-generation service. Their text is 
 
 Completed clips appear in the workspace's animation assets. **Add to timeline**, position the clip, edit its separately composed headline/narration, and render. Generated source audio is discarded to keep one coherent narrator and music bed. Failed generation preserves the existing film and timeline draft. Generated visuals are abstract launch imagery; the app itself is always represented by actual captured footage.
 
-The editor uses a source-referenced, non-destructive timeline and explicit transition timing, following concepts explored in [OpenCut](https://github.com/OpenCut-app/OpenCut) and [Remotion's transition documentation](https://www.remotion.dev/docs/transitions). It does not bundle either editor or copy their source. The supplied [LangEase launch reference](https://www.youtube.com/watch?v=SgmuplXU2iY) informed the direction; only public reference stills were accessible, so exact pacing could not be inspected. All built-in motion artwork is original.
+The editor uses a source-referenced, non-destructive timeline and explicit transition timing. Remotion provides composition and frame rendering; our editor, motion designs, and shot orchestration are original. Earlier editor research included [OpenCut](https://github.com/OpenCut-app/OpenCut). The supplied [LangEase launch reference](https://www.youtube.com/watch?v=SgmuplXU2iY) informed the direction; only public reference stills were accessible, so exact pacing could not be inspected.
 
 ## MCP connector
 
@@ -119,6 +123,8 @@ Example prompt:
 - `server/video_render.py`: FFmpeg composition, captions, narration alignment, and synthesized music.
 - `server/video_timeline.py`: immutable source references, trim validation, cut/order edits, launch drafts.
 - `server/video_motion.py`: original typography and product-reveal animation renderer.
+- `src/video/`: reviewed Remotion compositions, typography, camera movement, and product-layer animation.
+- `server/video_composition.py`, `scripts/render_motion.mjs`: private asset preparation, cached rendering, and cancellation.
 - `server/video_generation.py`: bounded Veo/Sora creation, polling, and private downloads.
 - `scripts/video_browser.mjs`: isolated Playwright capture worker. Credentials enter through stdin and never appear in project metadata.
 - `supabase/migrations/20261004000100_cutroom.sql`: user-scoped Postgres jobs/voices, Realtime, and private Storage.
@@ -147,6 +153,8 @@ npm run test:editing   # Run after test:video:e2e; real UI word edits, cuts, tri
 The API and Vite servers must be running for integration checks. End-to-end verification uses configured model/speech credits when available and writes an actual film and screenshots under `.cutroom/verification/`. Without keys it uses the labelled sample fallbacks. Existing Trace browser/stack checks apply only to the prior Trace app.
 
 To reproduce Cutroom’s own directed launch film, first run `test:video:e2e` and `test:launch` to create the private verification workspace and its sample film. Run `node scripts/capture_studio_launch.mjs`, then `.venv/bin/python -m scripts.render_studio_launch`. This records the actual local UI and renders a narrated 1080p film under `.cutroom/verification/cutroom-launch/film.mp4`. Narration uses OpenAI credits. Pass `--reuse-audio` to the render command only when the spoken copy is unchanged. This is a scripted capture of our studio, not a test of autonomous URL-only navigation.
+
+For the two short motion treatments, run `node scripts/capture_motion_preview.mjs` then `.venv/bin/python -m scripts.render_motion_previews`. These use the same actual editor capture, product-element screenshots, and narration to compare the reveal and layered treatments under `.cutroom/verification/motion-v2/{reveal,panels}/film.mp4`. This is a directed comparison through the normal rendering engine. A 1–5 opening-variation selector, repository ingestion, and a standalone customer CLI are not implemented yet; URL input and the existing authenticated MCP remain the supported entry points.
 
 The public-URL check uses Playwright's TodoMVC demo, which stores task changes only in that browser's localStorage. It verifies a real deployed URL with the sample shortcut disabled. This is a tested example, not a benchmark across arbitrary apps. The Docker runtime has also passed a full offline sample capture, FFmpeg render, and signed MP4 playback check under its non-root user.
 

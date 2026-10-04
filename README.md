@@ -150,6 +150,22 @@ The public-URL check uses Playwright's TodoMVC demo, which stores task changes o
 
 ## Hosting and practical limits
 
+### Vercel studio + persistent video worker
+
+The repository includes `vercel.ts`: Vite builds into `dist`, while `/api/*`, `/mcp`, and `/media/*` are proxied to `CUTROOM_WORKER_ORIGIN`. Set that variable to the worker’s public HTTPS origin in Vercel and redeploy. Without it, the studio loads with a clear unavailable state; video creation and MCP are not operational.
+
+```sh
+npx vercel@latest link --project supabase-select-2026 --scope shoadachi01s-projects
+npx vercel@latest env add CUTROOM_WORKER_ORIGIN production
+npx vercel@latest deploy --prod
+```
+
+Deploy the existing Dockerfile to a persistent container host with a volume at `/data`, one worker process, and the variables in `.env.example`. Use the hosted Supabase URL and publishable/anon key, apply the Cutroom migration, and enable anonymous sign-ins. Keep provider keys on the worker. Set `CUTROOM_PUBLIC_ORIGIN` to the Vercel production URL and `CUTROOM_SAMPLE_ORIGIN` to the worker origin. Localhost Supabase cannot be used by a hosted worker.
+
+Vercel's function/container execution model does not preserve this worker’s in-process job queue or local captures across instances. Hosting the entire pipeline there would require durable job orchestration and remote source-artifact storage. The current split deployment preserves editing and long-running renders.
+
+`.vercelignore` limits CLI uploads to frontend/configuration files and the unavailable-service handler; private captures, environment files, and internal documents remain local.
+
 `npm run build` and `.venv/bin/python scripts/serve.py` serve the frontend and API together on `PORT` (default 8000).
 
 The Dockerfile includes Chromium, Node, Python, FFmpeg, and fonts:

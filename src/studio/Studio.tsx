@@ -501,7 +501,11 @@ export default function Studio() {
         </div>
         <div className="sidebar-bottom">
           <span className={`connection-dot ${ready ? 'online' : ''}`} />
-          {ready ? 'Workspace connected' : 'Connecting workspace…'}
+          {ready
+            ? 'Workspace connected'
+            : error
+              ? 'Workspace unavailable'
+              : 'Connecting workspace…'}
           <button
             title="Refresh connection"
             onClick={() => refresh().catch((e) => setError(e.message))}

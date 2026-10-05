@@ -134,3 +134,33 @@ def test_sound_cues_are_repeatable_and_do_not_clip(tmp_path):
     with wave.open(str(first)) as source:
         samples = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2")
     assert max(abs(samples.astype(int))) <= 31130
+
+
+def test_directed_narration_extends_picture_and_graphic_hits_on_the_same_beat_grid(
+    tmp_path, capture, monkeypatch
+):
+    monkeypatch.setattr(video_composition, "run_compositor", lambda *args: None)
+    Image.new("RGB", (320, 180), "blue").save(tmp_path / "scene-0.jpg")
+    speech = tmp_path / "voice.wav"
+    ffmpeg("-f", "lavfi", "-i", "sine=frequency=400:sample_rate=48000", "-t", "2.7", str(speech))
+    scene = {
+        "kind": "browser",
+        "motion": "directed",
+        "start": 1.2,
+        "end": 2,
+        "duration": 2,
+        "thumbnail": "scene-0.jpg",
+        "direction": {
+            "bpm": 120,
+            "beats": 4,
+            "layers": [{"kind": "footage", "states": [{"beat": 0}, {"beat": 4}]}],
+            "hits": [{"beat": 2, "kind": "thump"}],
+        },
+    }
+    video_composition.prepare_compositions(tmp_path, capture, [scene], "paper", [speech])
+    job = json.loads((tmp_path / "motion-jobs.json").read_text())["jobs"][0]
+    assert job["frames"] == 90  # Three complete seconds, so the 2.7s narration survives.
+    assert job["direction"]["beats"] == 6
+    assert job["direction"]["layers"][0]["states"][-1]["beat"] == 6
+    assert job["direction"]["hits"][0]["beat"] == 3
+    assert job["footage"] == "motion-footage-0.mp4"

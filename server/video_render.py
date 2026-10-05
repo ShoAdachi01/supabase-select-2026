@@ -401,22 +401,53 @@ def render(
             total += lengths[i]
         ffmpeg("-f", "concat", "-safe", "0", "-i", str(manifest), "-c", "copy", str(joined))
     output = directory / "film.mp4"
-    if music != "none":
+    from server.video_sound import beat_map, interaction_audio, launch_music
+
+    effects = directory / "interactions.wav"
+    cues = interaction_audio(effects, total + 0.1, scenes)
+    (directory / "sound-cues.json").write_text(json.dumps(cues, indent=2))
+    beats = beat_map(scenes, total)
+    (directory / "beats.json").write_text(json.dumps(beats, indent=2))
+    if music != "none" or cues:
         bed = directory / "music.wav"
-        original_music(bed, total + 0.5, music)
-        if designed:
-            transition_cues(bed, scenes)
+        voiced = any(audio_paths)
+        if music == "none":
+            ffmpeg(
+                "-f", "lavfi", "-i", "anullsrc=r=24000:cl=stereo", "-t", str(total + 0.1), str(bed)
+            )
+        elif any(s.get("motion") == "directed" for s in scenes) or (
+            not voiced and music == "momentum"
+        ):
+            launch_music(bed, total + 0.1, beats["bpm"], ambient=music == "ambient")
+        else:
+            original_music(bed, total + 0.1, music)
+            if designed:
+                transition_cues(bed, scenes)
+        if voiced:
+            graph = (
+                "[0:a]loudnorm=I=-16:TP=-1.5:LRA=9,asplit=2[voice][side];"
+                "[1:a]loudnorm=I=-21:TP=-2:LRA=7[bed];"
+                "[bed][side]sidechaincompress=threshold=.06:ratio=2:attack=15:release=250[duck];"
+                "[voice][duck][2:a]amix=inputs=3:duration=first:normalize=0,alimiter=limit=.95:level=false[a]"
+            )
+        else:
+            bed_filter = "anull" if music == "none" else "loudnorm=I=-16:TP=-2:LRA=7"
+            graph = f"[1:a]{bed_filter}[bed];[bed][2:a]amix=inputs=2:normalize=0,alimiter=limit=.95:level=false[a]"
         ffmpeg(
             "-i",
             str(joined),
             "-i",
             str(bed),
+            "-i",
+            str(effects),
             "-filter_complex",
-            "[0:a]loudnorm=I=-16:TP=-1.5:LRA=9,asplit=2[voice][side];[1:a]loudnorm=I=-21:TP=-2:LRA=7[bed];[bed][side]sidechaincompress=threshold=.06:ratio=2:attack=15:release=250[duck];[voice][duck]amix=inputs=2:duration=first:normalize=0,alimiter=limit=.95:level=false[a]",
+            graph,
             "-map",
             "0:v",
             "-map",
             "[a]",
+            "-t",
+            str(total),
             "-c:v",
             "copy",
             "-c:a",

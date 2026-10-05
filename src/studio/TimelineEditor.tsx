@@ -121,11 +121,13 @@ export default function TimelineEditor({
               <small>
                 {!c.enabled
                   ? 'Cut from film'
-                  : c.kind === 'browser'
-                    ? 'Product footage'
-                    : c.kind === 'generated'
-                      ? 'Generated animation'
-                      : 'Animated typography'}
+                  : c.motion === 'directed'
+                    ? 'Directed composition'
+                    : c.kind === 'browser'
+                      ? 'Product footage'
+                      : c.kind === 'generated'
+                        ? 'Generated animation'
+                        : 'Animated typography'}
               </small>
             </span>
           </button>
@@ -225,10 +227,30 @@ export default function TimelineEditor({
               type="number"
               min={1}
               max={clip.kind === 'generated' ? clip.duration : 15}
-              step={0.1}
+              step={clip.motion === 'directed' && clip.direction ? 60 / clip.direction.bpm : 0.1}
               value={clip.duration}
               disabled={disabled}
-              onChange={(e) => patch({ duration: Number(e.target.value) })}
+              onChange={(e) => {
+                const duration = Number(e.target.value);
+                if (clip.motion !== 'directed' || !clip.direction) return patch({ duration });
+                const beats = Math.max(
+                  2,
+                  Math.min(24, Math.round((duration * clip.direction.bpm) / 60)),
+                );
+                const ratio = beats / clip.direction.beats;
+                patch({
+                  duration: (beats * 60) / clip.direction.bpm,
+                  direction: {
+                    ...clip.direction,
+                    beats,
+                    layers: clip.direction.layers.map((layer) => ({
+                      ...layer,
+                      states: layer.states.map((state) => ({ ...state, beat: state.beat * ratio })),
+                    })),
+                    hits: clip.direction.hits.map((hit) => ({ ...hit, beat: hit.beat * ratio })),
+                  },
+                });
+              }}
             />
           </label>
           {clip.kind !== 'generated' && (
@@ -241,6 +263,7 @@ export default function TimelineEditor({
                 onChange={(e) => patch({ motion: e.target.value as TimelineClip['motion'] })}
               >
                 <option value="none">Original footage / classic title</option>
+                {clip.direction && <option value="directed">Directed composition</option>}
                 {clip.kind === 'browser' ? (
                   <option value="detail">Detail → overview</option>
                 ) : (

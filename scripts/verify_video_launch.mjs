@@ -7,6 +7,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 const origin = process.env.CUTROOM_URL || 'http://127.0.0.1:5173';
 const folder = '.cutroom/verification';
+const musicLed = process.env.CUTROOM_MUSIC_LED === '1';
+const artifact =
+  process.env.CUTROOM_DIRECTED === '1' ? 'directed' : musicLed ? 'music-led' : 'polished';
 await mkdir(folder, { recursive: true });
 const browser = await chromium.launch();
 const context = await browser.newContext({
@@ -38,12 +41,14 @@ try {
   }
   let job;
   if (process.env.CUTROOM_REVISE) {
-    const previous = JSON.parse(await readFile(`${folder}/polished-result.json`, 'utf8'));
-    const plan = await call('plan_launch_video', { video_id: previous.video_id });
+    const previous = JSON.parse(await readFile(`${folder}/${artifact}-result.json`, 'utf8'));
+    const plan = process.env.CUTROOM_REUSE_PLAN
+      ? { clips: (await call('get_video', { video_id: previous.video_id })).payload.timeline }
+      : await call('plan_launch_video', { video_id: previous.video_id });
     job = await call('render_video', {
       video_id: previous.video_id,
       clips: plan.clips,
-      voice: 'cedar',
+      voice: musicLed ? 'none' : 'cedar',
       music: 'momentum',
       theme: 'midnight',
     });
@@ -51,16 +56,16 @@ try {
     job = await call('create_product_video', {
       url: 'https://example.com',
       demo: true,
-      title: 'Meridian — launch',
+      title: musicLed ? 'Meridian — music-led launch' : 'Meridian — launch',
       brief:
         'Show projects, open Website refresh, switch to the board, then show analytics. A punchy launch film about clarity and team progress. Keep four feature shots and avoid repeated navigation.',
-      voice: 'cedar',
+      voice: musicLed ? 'none' : 'cedar',
       music: 'momentum',
       theme: 'midnight',
     });
   const id = job.id;
   let stage = '';
-  for (let i = 0; i < 240; i++) {
+  for (let i = 0; i < 600; i++) {
     await page.waitForTimeout(2000);
     job = await call('get_video', { video_id: id });
     if (job.status !== stage) {
@@ -76,24 +81,36 @@ try {
     'Launch film stays within its short edit budget.',
   );
   assert.ok(
-    job.payload.scenes.some((s) => s.shot === 'result'),
+    job.payload.scenes.some((s) => (musicLed ? s.interactions?.length > 0 : s.shot === 'result')),
     'Navigation is removed from at least one shot.',
   );
   for (const scene of job.payload.scenes.filter((s) => s.shot === 'result')) {
     assert.ok(scene.alignment_error <= 2.5, 'Result footage matches its verified screen.');
     assert.ok(scene.end - scene.start >= 0.25, 'Matched footage has a usable duration.');
   }
-  assert.ok(
-    job.payload.timeline.some((c) => !c.enabled),
-    'Overview is cut but restorable.',
-  );
-  assert.ok(job.payload.rendered_scenes.every((s) => s.duration <= 6));
+  if (job.payload.direction) {
+    assert.ok(job.payload.timeline.every((c) => c.motion === 'directed' && c.direction));
+    assert.ok(job.payload.direction.review.passes.length <= 3);
+    assert.ok(job.payload.direction.review.revision_count <= 2);
+    assert.ok(new Set(job.payload.timeline.map((c) => c.direction.composition)).size >= 2);
+    const overview = job.payload.scenes.find((s) => s.action === 'overview');
+    if (overview) assert.ok(job.payload.timeline.every((c) => c.scene_id !== overview.thumbnail));
+  } else
+    assert.ok(
+      job.payload.timeline.some((c) => !c.enabled),
+      'Overview is cut but restorable.',
+    );
+  assert.ok(job.payload.rendered_scenes.every((s) => s.duration <= 15));
+  if (musicLed) {
+    assert.equal(job.payload.narration_source, 'Music and interaction sounds');
+    assert.ok(job.payload.rendered_scenes.every((s) => !s.narration));
+  }
   const exported = await call('export_video', { video_id: id });
   const film = await fetch(new URL(exported.url, origin));
   assert.equal(film.status, 200);
-  await writeFile(`${folder}/polished-film.mp4`, new Uint8Array(await film.arrayBuffer()));
+  await writeFile(`${folder}/${artifact}-film.mp4`, new Uint8Array(await film.arrayBuffer()));
   await writeFile(
-    `${folder}/polished-result.json`,
+    `${folder}/${artifact}-result.json`,
     JSON.stringify(
       {
         video_id: id,
@@ -107,7 +124,7 @@ try {
   );
   await page.reload();
   await page
-    .getByRole('button', { name: /Meridian — launch/ })
+    .getByRole('button', { name: musicLed ? /Meridian — music-led launch/ : /Meridian — launch/ })
     .first()
     .click();
   await page.getByRole('button', { name: 'Script', exact: true }).click();
@@ -136,7 +153,7 @@ try {
   assert.deepEqual(errors, []);
   await context.storageState({ path: `${folder}/browser-session.json` });
   console.log(
-    `PASS: MCP create → real capture → motion reveals → narration/music → private export; ${job.payload.export.duration_seconds}s. ${folder}/polished-film.mp4`,
+    `PASS: MCP create → real capture → motion reveals → narration/music → private export; ${job.payload.export.duration_seconds}s. ${folder}/${artifact}-film.mp4`,
   );
 } finally {
   await agent.close();

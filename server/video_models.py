@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
+from server.video_direction_models import ShotDirection
+
 
 class DemoCredentials(BaseModel):
     username: str = Field(default="", max_length=300)
@@ -19,12 +21,42 @@ class VideoInput(BaseModel):
     title: str = Field(default="Product walkthrough", min_length=1, max_length=100)
     brief: str = Field(min_length=8, max_length=3000)
     credentials: DemoCredentials | None = None
-    voice: str = Field(default="marin", max_length=100)
-    music: Literal["ambient", "momentum", "none"] = "ambient"
+    voice: str = Field(
+        default="none",
+        max_length=100,
+        description="Use none for a music-led launch film without narration.",
+    )
+    music: Literal["ambient", "momentum", "none"] = "momentum"
     theme: Literal["midnight", "paper"] = "midnight"
     duration: Literal[30, 60, 90] = 30
     demo: bool = False
     format: Literal["launch", "walkthrough"] = "launch"
+    reference_urls: list[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description="Optional public reference video/image/page URLs. Accessible media is analyzed for visual grammar; unavailable references are reported.",
+    )
+    creative_direction: str = Field(
+        default="",
+        max_length=2000,
+        description="Optional art direction or reference grammar: pacing, typography, motion, and sound. The director chooses a film-specific structure.",
+    )
+
+    @model_validator(mode="after")
+    def reference_links(self):
+        from urllib.parse import urlsplit
+
+        for url in self.reference_urls:
+            parts = urlsplit(url)
+            if (
+                len(url) > 2000
+                or parts.scheme not in ("http", "https")
+                or not parts.hostname
+                or parts.username
+                or parts.password
+            ):
+                raise ValueError("References must be public HTTP(S) URLs without credentials")
+        return self
 
 
 class VideoId(BaseModel):
@@ -43,11 +75,21 @@ class TimelineClip(BaseModel):
     layout: Literal["hook", "benefit", "outro"] = "hook"
     duration: float = Field(default=4, ge=1, le=15)
     camera: Literal["wide", "push"] = "wide"
-    motion: Literal["none", "reveal", "panels", "detail", "resolve"] = "none"
+    motion: Literal["none", "reveal", "panels", "detail", "resolve", "directed"] = "none"
+    direction: ShotDirection | None = None
     trim_start: float = Field(default=0, ge=0)
     trim_end: float | None = Field(default=None, ge=0)
     enabled: bool = True
     transition: Literal["cut", "fade", "dissolve"] = "cut"
+
+    @model_validator(mode="after")
+    def directed_contract(self):
+        if self.motion == "directed":
+            if self.direction is None:
+                raise ValueError("Directed clips need a validated scene specification.")
+            if abs(self.duration - self.direction.beats * 60 / self.direction.bpm) > 0.001:
+                raise ValueError("Directed duration must match its beat grid.")
+        return self
 
 
 class RenderInput(VideoId):

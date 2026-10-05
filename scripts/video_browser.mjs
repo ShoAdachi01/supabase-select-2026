@@ -1,4 +1,5 @@
 import { chromium } from 'playwright';
+import { createDirectedCapture } from './video_capture.mjs';
 import { createInterface } from 'node:readline';
 import { createURLValidator } from './video_network.mjs';
 import { resolve } from 'node:path';
@@ -93,7 +94,9 @@ try {
     storageState: state,
     viewport: { width: 1920, height: 1080 },
     deviceScaleFactor: 2,
-    recordVideo: { dir: input.directory, size: { width: 1920, height: 1080 } },
+    ...(input.musicLed
+      ? {}
+      : { recordVideo: { dir: input.directory, size: { width: 1920, height: 1080 } } }),
     acceptDownloads: false,
     serviceWorkers: 'block',
   });
@@ -103,7 +106,7 @@ try {
       if (!document.body) return;
       const style = document.createElement('style');
       style.textContent =
-        '*{cursor:none!important}html{scroll-behavior:smooth!important}[data-cutroom-cursor]{position:fixed;left:0;top:0;width:22px;height:28px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 3px #0005);transition:transform 300ms cubic-bezier(.22,1,.36,1)}';
+        '*{cursor:none!important}html{scroll-behavior:smooth!important}[data-cutroom-cursor]{position:fixed;left:0;top:0;width:28px;height:36px;z-index:2147483647;pointer-events:none;filter:drop-shadow(0 2px 3px #0005);transition:transform 540ms cubic-bezier(.22,1,.36,1)}';
       document.head.append(style);
       const cursor = document.createElement('div');
       cursor.dataset.cutroomCursor = 'true';
@@ -120,6 +123,7 @@ try {
   await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(1500);
   await loginContext.close();
+  const recorder = input.musicLed ? await createDirectedCapture(page, input.directory) : null;
   const scenes = [];
   const elapsed = () => (Date.now() - started) / 1000;
   async function observe() {
@@ -243,11 +247,11 @@ try {
     }
     scenes.push(scene);
   }
-  const overviewStart = elapsed();
+  const overviewStart = recorder ? await recorder.begin() : elapsed();
   await page.waitForTimeout(2200);
   await snapshot({
     start: overviewStart,
-    end: elapsed(),
+    end: recorder ? await recorder.end() : elapsed(),
     label: 'The big picture',
     focus: { x: 640, y: 360 },
     action: 'overview',
@@ -257,7 +261,8 @@ try {
     const action = await receive();
     if (action.type === 'done') break;
     const scene = {
-      start: elapsed(),
+      start: recorder ? await recorder.begin() : elapsed(),
+      interactions: [],
       label: String(action.label || 'Feature detail').slice(0, 100),
       focus: { x: 640, y: 360 },
       action: action.type,
@@ -293,14 +298,53 @@ try {
             const c = document.querySelector('[data-cutroom-cursor]');
             if (c) c.style.transform = `translate(${x}px,${y}px)`;
           }, scene.focus);
-          await page.waitForTimeout(320);
+          await page.waitForTimeout(input.musicLed ? 680 : 320);
         }
-        if (action.type === 'click') await el.click();
-        else if (action.type === 'select')
+        const mark = (kind) => {
+          if (!recorder) return;
+          scene.interactions.push({
+            kind,
+            time: recorder.time(),
+            ...scene.focus,
+          });
+        };
+        if (action.type === 'click') {
+          mark('click');
+          if (input.musicLed)
+            await page.evaluate(({ x, y }) => {
+              const pulse = document.createElement('div');
+              Object.assign(pulse.style, {
+                position: 'fixed',
+                left: `${x - 18}px`,
+                top: `${y - 18}px`,
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                border: '2px solid #6d5dfc',
+                zIndex: '2147483646',
+                pointerEvents: 'none',
+              });
+              document.body.append(pulse);
+              pulse
+                .animate(
+                  [
+                    { transform: 'scale(.4)', opacity: 0.8 },
+                    { transform: 'scale(1.5)', opacity: 0 },
+                  ],
+                  { duration: 420, fill: 'forwards' },
+                )
+                .finished.then(() => pulse.remove());
+            }, scene.focus);
+          await el.click();
+        } else if (action.type === 'select') {
+          mark('click');
           await el.selectOption(String(action.value || '').slice(0, 500));
-        else {
+        } else {
           await el.fill('');
-          await el.pressSequentially(String(action.value || '').slice(0, 500), { delay: 18 });
+          for (const character of String(action.value || '').slice(0, 160)) {
+            mark('key');
+            await el.pressSequentially(character, { delay: input.musicLed ? 42 : 18 });
+          }
         }
       } else if (action.type === 'scroll') {
         await page.evaluate(
@@ -312,7 +356,7 @@ try {
       } else if (action.type !== 'hold') throw new Error('Unsupported browser action.');
       await page.waitForLoadState('domcontentloaded');
       await page.waitForTimeout(800);
-      if (showResult) {
+      if (showResult && !input.musicLed) {
         // Page navigation is preparation. Film the ready destination rather than its loading state.
         scene.start = elapsed();
         scene.focus = { x: 640, y: 360 };
@@ -320,17 +364,23 @@ try {
         await page.waitForTimeout(3200);
       } else {
         scene.shot = 'action';
-        await page.waitForTimeout(800);
+        await page.waitForTimeout(input.musicLed ? 1400 : 800);
       }
-      scene.end = elapsed();
+      scene.end = recorder ? await recorder.end() : elapsed();
       await snapshot(scene);
       send(await observe());
     } catch (error) {
+      if (recorder) throw error;
       send({ ...(await observe()), action_error: String(error.message).slice(0, 300) });
     }
   }
+  if (recorder) await recorder.finish();
   await context.close();
-  send({ type: 'complete', scenes, video: await page.video().path() });
+  send({
+    type: 'complete',
+    scenes,
+    ...(recorder ? { directed: true } : { video: await page.video().path() }),
+  });
 } catch (error) {
   let message = String(error.message);
   // Playwright call logs can echo the value passed to fill() on a failed login.

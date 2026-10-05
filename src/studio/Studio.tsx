@@ -144,8 +144,8 @@ export default function Studio() {
   const [animationPrompt, setAnimationPrompt] = useState(
     'Ivory background, coral and sage geometric panels gently organizing into one elegant frame. Soft studio lighting, precise smooth motion. End on a clean ivory background for a dissolve into the product.',
   );
-  const [voice, setVoice] = useState('marin');
-  const [music, setMusic] = useState<'ambient' | 'momentum' | 'none'>('ambient');
+  const [voice, setVoice] = useState('none');
+  const [music, setMusic] = useState<'ambient' | 'momentum' | 'none'>('momentum');
   const [theme, setTheme] = useState<'midnight' | 'paper'>('midnight');
   const [editorTab, setEditorTab] = useState<'script' | 'style' | 'animation' | 'activity'>(
     'script',
@@ -162,6 +162,8 @@ export default function Studio() {
     url: '',
     title: '',
     brief: '',
+    creative_direction: '',
+    reference_urls: '',
     username: '',
     password: '',
     login_url: '',
@@ -270,6 +272,11 @@ export default function Studio() {
         voice,
         music,
         theme,
+        creative_direction: form.creative_direction,
+        reference_urls: form.reference_urls
+          .split(/\n/)
+          .map((url) => url.trim())
+          .filter(Boolean),
         duration: form.duration,
         format: form.format,
         demo,
@@ -376,6 +383,10 @@ export default function Studio() {
     }
   }
   async function previewVoice(id: string, text?: string) {
+    if (id === 'none') {
+      setNotice('This style uses music and interaction sounds, with no voiceover.');
+      return;
+    }
     if (!features.narration && !id.includes('-')) {
       setNotice('Connect an OpenAI API key to hear the stock voices.');
       return;
@@ -761,7 +772,9 @@ export default function Studio() {
                         setForm({ ...form, format: e.target.value as typeof form.format })
                       }
                     >
-                      <option value="launch">Launch film · hook, product proof, closing</option>
+                      <option value="launch">
+                        Launch film · directed motion and product footage
+                      </option>
                       <option value="walkthrough">Product walkthrough · footage only</option>
                     </select>
                   </label>
@@ -835,6 +848,35 @@ export default function Studio() {
                   <p className="field-hint">
                     Tell us what to demonstrate and why your audience cares.
                   </p>
+                  {form.format === 'launch' && (
+                    <>
+                      <label>
+                        Art direction <span className="field-hint">Optional</span>
+                        <textarea
+                          rows={2}
+                          maxLength={2000}
+                          placeholder="What should this feel like? Mention the audience, mood, typography, pacing, or what you like about your reference."
+                          value={form.creative_direction}
+                          onChange={(e) => setForm({ ...form, creative_direction: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Reference links <span className="field-hint">Optional · up to three</span>
+                        <textarea
+                          rows={2}
+                          maxLength={6002}
+                          placeholder="One public video, image, or reference page URL per line"
+                          value={form.reference_urls}
+                          onChange={(e) => setForm({ ...form, reference_urls: e.target.value })}
+                        />
+                      </label>
+                      <p className="field-hint">
+                        We study up to 24 seconds of accessible video, or an image’s layout. Direct
+                        MP4, WebM, and image links work best. If a page blocks access, we’ll tell
+                        you.
+                      </p>
+                    </>
+                  )}
                   <label>
                     Target length
                     <div className="segmented">
@@ -1118,6 +1160,8 @@ export default function Studio() {
                         ...f,
                         url: job.payload.demo ? '' : job.payload.url,
                         brief: job.payload.brief,
+                        creative_direction: job.payload.creative_direction || '',
+                        reference_urls: (job.payload.reference_urls || []).join('\n'),
                         title: job.title,
                       }));
                       setCreating(true);

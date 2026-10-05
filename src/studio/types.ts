@@ -21,7 +21,8 @@ export type TimelineClip = {
   layout: 'hook' | 'benefit' | 'outro';
   duration: number;
   camera?: 'wide' | 'push';
-  motion?: 'none' | 'reveal' | 'panels' | 'detail' | 'resolve';
+  motion?: 'none' | 'reveal' | 'panels' | 'detail' | 'resolve' | 'directed';
+  direction?: import('../video/DirectedShot').ShotDirection;
   trim_start: number;
   trim_end?: number | null;
   enabled: boolean;
@@ -46,6 +47,8 @@ export type Video = {
     url: string;
     host: string;
     brief: string;
+    creative_direction?: string;
+    reference_urls?: string[];
     voice: string;
     music: 'ambient' | 'momentum' | 'none';
     theme: 'midnight' | 'paper';

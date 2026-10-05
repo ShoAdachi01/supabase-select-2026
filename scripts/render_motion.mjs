@@ -1,4 +1,4 @@
-// Render only fixed, reviewed compositions. No model-generated executable code or remote assets.
+// Render validated declarative scenes. No model-generated executable code or remote assets.
 import { bundle } from '@remotion/bundler';
 import { openBrowser, selectComposition, renderMedia, renderStill } from '@remotion/renderer';
 import { chromium } from 'playwright';
@@ -93,7 +93,7 @@ try {
     const signature = digest.digest('hex');
     const signaturePath = join(folder, `motion-${job.index}.sha256`);
     try {
-      if ((await readFile(signaturePath, 'utf8')) === signature) {
+      if (!manifest.preview && (await readFile(signaturePath, 'utf8')) === signature) {
         await stat(join(folder, `motion-${job.index}.mp4`));
         await stat(join(folder, `edit-${job.index}.jpg`));
         console.log(JSON.stringify({ reused: job.index }));
@@ -115,6 +115,30 @@ try {
       puppeteerInstance: browser,
       logLevel: 'error',
     });
+    if (manifest.preview) {
+      const frames = [
+        ...new Set([
+          0,
+          ...[0.2, 0.5, 0.8].map((t) => Math.round((job.frames - 1) * t)),
+          job.frames - 1,
+        ]),
+      ];
+      for (const frame of frames) {
+        await renderStill({
+          composition,
+          serveUrl: cache,
+          inputProps: props,
+          output: join(folder, `preview-${job.index}-${frame}.jpg`),
+          frame,
+          imageFormat: 'jpeg',
+          scale: 0.5,
+          puppeteerInstance: browser,
+          logLevel: 'error',
+        });
+      }
+      console.log(JSON.stringify({ previewed: job.index, frames }));
+      continue;
+    }
     await renderMedia({
       composition,
       serveUrl: cache,

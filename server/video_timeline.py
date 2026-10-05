@@ -44,15 +44,101 @@ def launch_prompt(title: str, brief: str, scenes: list[dict]) -> str:
     )
 
 
+def music_launch_prompt(title: str, brief: str, scenes: list[dict], evidence: list[str]) -> str:
+    import json
+
+    shots = [
+        {"scene_id": s.get("thumbnail"), "label": s["label"], "action": s.get("action")}
+        for s in scenes
+        if s.get("action") != "overview"
+    ]
+    schema = {
+        "hook": {"headline": "2–5 words"},
+        "benefit": {"headline": "2–5 words"},
+        "outro": {"headline": "2–5 words"},
+        "labels": {s["scene_id"]: "2–5 words for this exact screenshot" for s in shots},
+    }
+    return (
+        f"Direct a music-led product launch for {title}. Brief: {brief}. "
+        f"Captured shots: {json.dumps(shots)}. Visible evidence: {json.dumps(evidence)}. "
+        f"Return this JSON shape: {json.dumps(schema)}. "
+        "Match each label to its exact scene_id printed above the screenshot. Do not shift labels to the next scene. "
+        "Use 2–5 words per line, sentence case, concrete natural language, no narration. "
+        "Give this product a clear promise, visible proof, and closing thought. "
+        "Name the things visible in each screen: owners, dates, statuses, or actual controls. "
+        "Do not mistake content INSIDE the product for a capability OF the product. A project named "
+        "'Website refresh' does not mean the app builds or refreshes websites. "
+        "Do not promise speed, improved decisions, closer teams, or business outcomes from a static screen. "
+        "Avoid presentation jargon: data-driven decisions, in-depth metrics, snapshot, seamless, insights. "
+        "Tone examples: 'Every project, together.' or 'Owners. Dates. Progress.' "
+        "These are tone examples only; ground every line in this product's captured evidence. "
+        "Do not invent features, outcomes, statistics, pricing, or testimonials."
+    )
+
+
+def music_launch_plan(title: str, brief: str, scenes: list[dict], folder, evidence=None) -> dict:
+    """Give copywriting the real captured screens, not just navigation labels."""
+    import base64
+    import io
+
+    from PIL import Image, ImageDraw
+
+    from server.video_providers import reason
+
+    visible = [(i, s) for i, s in enumerate(scenes) if s.get("action") != "overview"][:8]
+    if not visible:
+        raise ValueError("No feature interaction was captured. Try a more specific feature brief.")
+    contact = Image.new("RGB", (1920, max(1, (len(visible) + 1) // 2) * 570), "white")
+    draw = ImageDraw.Draw(contact)
+    for tile, (_index, scene) in enumerate(visible):
+        name = scene.get("thumbnail", "")
+        if not re.fullmatch(r"scene-\d{1,2}\.jpg", name):
+            raise ValueError("Invalid screen evidence for launch copy.")
+        with Image.open(folder / name) as image:
+            image = image.convert("RGB")
+            image.thumbnail((960, 540))
+            x, y = tile % 2 * 960, tile // 2 * 570
+            contact.paste(image, (x, y + 30))
+            draw.text((x + 10, y + 5), f"Source {name}", fill="black")
+    buffer = io.BytesIO()
+    contact.save(buffer, "JPEG", quality=85)
+    plan = reason(
+        music_launch_prompt(title, brief, scenes, evidence or []),
+        base64.b64encode(buffer.getvalue()).decode(),
+    )
+    proposed = plan.get("labels", {})
+    proposed = proposed if isinstance(proposed, dict) else {}
+    labels = []
+    for scene in scenes:
+        text = proposed.get(scene.get("thumbnail"))
+        if not isinstance(text, str) or not 1 <= len(text.split()) <= 5:
+            text = re.sub(r"^(show|open|switch to)\s+", "", scene["label"], flags=re.I)
+            text = " ".join(text.split()[:5])
+        labels.append(text[:70])
+    plan["labels"] = labels
+    return plan
+
+
 def launch_clips(
-    scenes: list[dict], title: str, plan: dict | None = None, target_duration: int = 30
+    scenes: list[dict],
+    title: str,
+    plan: dict | None = None,
+    target_duration: int = 30,
+    music_led: bool = False,
 ) -> list[dict]:
     plan = plan if isinstance(plan, dict) else {}
     originals = browser_clips(scenes)
+    labels = plan.get("labels", [])
+    if music_led and isinstance(labels, list) and len(labels) == len(originals):
+        for clip, label in zip(originals, labels, strict=True):
+            if isinstance(label, str) and label.strip():
+                clip["label"] = label[:70]
     # Keep source clips recoverable, but do not repeat an establishing screen before the feature.
     for clip, source in zip(originals, scenes, strict=True):
         clip["enabled"] = not (len(scenes) > 1 and source.get("action") == "overview")
-        has_detail = source.get("shot") == "result" and bool(source.get("details"))
+        has_detail = (source.get("shot") == "result" and bool(source.get("details"))) or (
+            music_led and bool(source.get("interactions"))
+        )
         clip["camera"] = "wide"
         clip["motion"] = "detail" if has_detail else "none"
     scripts = plan.get("narration", [])
@@ -72,6 +158,15 @@ def launch_clips(
     )
     for clip in originals:
         clip["duration"] = round(shot_duration, 1)
+    if music_led:
+        import math
+
+        for clip, source in zip(originals, scenes, strict=True):
+            interactions = source.get("interactions", [])
+            needed = max((e["time"] - source["start"] + 0.6 for e in interactions), default=0)
+            clip["duration"] = min(8, max(3.2, math.ceil(needed / 0.8) * 0.8))
+            clip["narration"] = ""
+            clip["headline"] = clip["label"][:70]
     cards = []
     for layout, headline, narration in (
         ("hook", title, ""),
@@ -94,12 +189,14 @@ def launch_clips(
                 headline=str(copy.get("headline") or headline)[:180],
                 subtitle=str(copy.get("subtitle") or "")[:240],
                 narration=str(copy.get("narration") or narration)[:1000],
-                duration={"hook": 2.4, "benefit": 2, "outro": 2.4}[layout],
+                duration={"hook": 2.4, "benefit": 1.6 if music_led else 2, "outro": 2.4}[layout],
                 motion={"hook": "reveal", "benefit": "panels", "outro": "resolve"}[layout],
             ).model_dump(mode="json")
         )
     visible = [i for i, clip in enumerate(originals) if clip["enabled"]]
-    midpoint = visible[min(1, len(visible) - 1)] + 1 if visible else len(originals)
+    midpoint = (
+        visible[min(2 if music_led else 1, len(visible) - 1)] + 1 if visible else len(originals)
+    )
     return [cards[0], *originals[:midpoint], cards[1], *originals[midpoint:], cards[2]]
 
 
@@ -133,6 +230,7 @@ def compile_timeline(job: dict, clips: list[TimelineClip]) -> list[dict]:
                 thumbnail=source.get("thumbnail"),
                 details=deepcopy(source.get("details", [])),
                 viewport=deepcopy(source.get("viewport", {"width": 1280, "height": 720})),
+                interactions=deepcopy(source.get("interactions", [])),
             )
         elif clip.kind == "generated":
             asset = assets.get(str(clip.asset_id))

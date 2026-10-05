@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from server.network import public_target
 from server.store import LOCAL_DEMO, Store
 from server.video_alignment import align_result_shots
+from server.video_capture import encode_directed_capture
 from server.video_models import (
     STOCK_VOICES,
     GenerateClipInput,
@@ -27,7 +28,13 @@ from server.video_models import (
 )
 from server.video_providers import capabilities, reason, setting, speech
 from server.video_render import ffmpeg, render
-from server.video_timeline import browser_clips, compile_timeline, launch_clips, launch_prompt
+from server.video_timeline import (
+    browser_clips,
+    compile_timeline,
+    launch_clips,
+    launch_prompt,
+    music_launch_plan,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 VIDEO_DIR = Path(os.getenv("CUTROOM_DATA_DIR", ".cutroom")).resolve()
@@ -58,6 +65,13 @@ def event(store: Store, job: dict, status: str, message: str, progress: int):
 
 def voices(store: Store) -> list[dict]:
     return [
+        {
+            "id": "none",
+            "name": "Music + interaction sounds",
+            "description": "No narration",
+            "provider": "builtin",
+            "kind": "stock",
+        },
         *[{**v, "provider": "openai", "kind": "stock"} for v in STOCK_VOICES],
         *[
             {
@@ -73,7 +87,7 @@ def voices(store: Store) -> list[dict]:
 
 
 def resolve_voice(store: Store, voice: str) -> dict | None:
-    if voice in {v["id"] for v in STOCK_VOICES}:
+    if voice == "none" or voice in {v["id"] for v in STOCK_VOICES}:
         return None
     try:
         return store.get("video_voices", str(uuid.UUID(voice)))
@@ -204,7 +218,26 @@ def choose_action(observation: dict, body: VideoInput, history: list[dict]) -> d
         "done means the requested feature has been visibly demonstrated. "
         'If the feature cannot be found, return {"type":"done","unavailable":true,"reason":"explanation"}.'
     )
-    return reason(prompt, observation["screenshot"])
+    if body.voice == "none":
+        prompt += (
+            " This film has no narrator. Demonstrate one coherent feature arc with 3–4 actions. "
+            "Prefer an actual input, selection, or view change that visibly proves the brief. "
+            "Keep labels to 2–5 words. Never type secrets or change real customer data. "
+            "Avoid touring unrelated pages merely to fill the duration."
+        )
+    ids = {str(element["id"]) for element in observation.get("elements", [])}
+    for _attempt in range(2):
+        action = reason(prompt, observation["screenshot"])
+        kind = action.get("type")
+        valid = kind in {"click", "fill", "select", "scroll", "press", "hold", "done"}
+        if kind in {"click", "fill", "select"}:
+            valid = valid and str(action.get("id")) in ids
+        if kind == "press":
+            valid = valid and action.get("key") in {"Enter", "Escape", "Tab"}
+        if valid:
+            return action
+        prompt += " Your last action did not match the action contract. Return ONE supported type and an existing visible element ID, or done."
+    raise ValueError("The browser director could not select a supported visible action.")
 
 
 def film(store: Store, job: dict, body: VideoInput):
@@ -249,6 +282,7 @@ def film(store: Store, job: dict, body: VideoInput):
                     "url": job["payload"]["url"],
                     "credentials": credentials,
                     "demo": body.demo,
+                    "musicLed": body.voice == "none",
                     "directory": str(folder),
                 }
             )
@@ -272,7 +306,7 @@ def film(store: Store, job: dict, body: VideoInput):
                     completed = observation
                     break
                 views.append(observation["text"][:3000])
-                if len(history) >= 8:
+                if len(history) >= (4 if body.voice == "none" and body.duration == 30 else 8):
                     send({"type": "done"})
                     continue
                 action = choose_action(observation, body, history)
@@ -293,21 +327,42 @@ def film(store: Store, job: dict, body: VideoInput):
             if not completed:
                 raise ValueError("Recording exceeded its time limit. Try a shorter feature brief.")
             scenes = completed["scenes"]
-            raw = Path(completed["video"]).resolve()
-            if raw.parent != folder:
-                raise ValueError("Invalid browser artifact.")
-            (folder / "raw.webm").write_bytes(raw.read_bytes())
-            align_result_shots(folder / "raw.webm", folder, scenes)
+            if completed.get("directed"):
+                encode_directed_capture(folder)
+            else:
+                raw = Path(completed["video"]).resolve()
+                if raw.parent != folder:
+                    raise ValueError("Invalid browser artifact.")
+                (folder / "raw.webm").write_bytes(raw.read_bytes())
+                align_result_shots(folder / "raw.webm", folder, scenes)
             job["payload"]["scenes"] = [{**scene, "narration": ""} for scene in scenes]
             event(
                 store,
                 job,
                 "scripting",
-                "Writing a voiceover from the screens the agent actually demonstrated.",
+                "Choosing a visual story from the captured interactions."
+                if body.voice == "none"
+                else "Writing a voiceover from the screens the agent actually demonstrated.",
                 60,
             )
             result = {}
-            if body.demo and not capabilities()["reasoning"]:
+            if body.voice == "none":
+                result = (
+                    music_launch_plan(body.title, body.brief, scenes, folder, views)
+                    if capabilities()["reasoning"] and body.format != "launch"
+                    else {}
+                )
+                labels = result.get("labels", [])
+                if not isinstance(labels, list):
+                    labels = []
+                if len(labels) == len(scenes) - 1 and scenes[0].get("action") == "overview":
+                    labels = [scenes[0]["label"], *labels]
+                if len(labels) == len(scenes):
+                    for scene, label in zip(scenes, labels, strict=True):
+                        if isinstance(label, str) and label.strip():
+                            scene["label"] = label[:70]
+                scripts = [""] * len(scenes)
+            elif body.demo and not capabilities()["reasoning"]:
                 scripts = [
                     "Meet Meridian. Bring your team's work together.",
                     "Every project. One clear view.",
@@ -332,7 +387,8 @@ def film(store: Store, job: dict, body: VideoInput):
                 )
                 scripts = result.get("narration", [])
             if len(scripts) != len(scenes) or any(
-                not isinstance(t, str) or not 1 <= len(t) <= 1000 for t in scripts
+                not isinstance(t, str) or not (0 if body.voice == "none" else 1) <= len(t) <= 1000
+                for t in scripts
             ):
                 raise ValueError(
                     "The script did not match the captured scenes. Start another take."
@@ -341,11 +397,91 @@ def film(store: Store, job: dict, body: VideoInput):
                 scene["narration"] = script
             job["payload"]["scenes"] = scenes
             job["payload"]["timeline"] = (
-                launch_clips(scenes, body.title, result, body.duration)
+                launch_clips(
+                    scenes, body.title, result, body.duration, music_led=body.voice == "none"
+                )
                 if body.format == "launch"
                 else browser_clips(scenes)
             )
-            event(store, job, "narrating", "Generating the voiceover and aligning each scene.", 66)
+            if body.format == "launch" and capabilities()["reasoning"]:
+                from server.video_direction import compile_direction, direct_film, review_film
+
+                event(
+                    store,
+                    job,
+                    "scripting",
+                    "Directing a film-specific composition and beat grid from your product.",
+                    62,
+                )
+                direction = direct_film(
+                    body.title,
+                    body.brief,
+                    scenes,
+                    folder,
+                    body.duration,
+                    body.creative_direction,
+                    views,
+                    reference_urls=body.reference_urls,
+                )
+                event(
+                    store,
+                    job,
+                    "rendering",
+                    "Rendering preview states and checking composition, continuity, and readability.",
+                    65,
+                )
+                reference_report = folder / "reference-analysis.json"
+                if reference_report.exists():
+                    job["payload"]["reference_analysis"] = json.loads(reference_report.read_text())
+                    for reference in job["payload"]["reference_analysis"]["references"]:
+                        if reference["status"] == "analyzed":
+                            detail = (
+                                "sampled video frames"
+                                if reference["kind"] == "video"
+                                else "a still image only; motion and sound were not observed"
+                            )
+                            event(
+                                store,
+                                job,
+                                "scripting",
+                                f"Reference {reference['index'] + 1}: studied {detail}.",
+                                64,
+                            )
+                    if any(
+                        r["status"] == "unavailable"
+                        for r in job["payload"]["reference_analysis"]["references"]
+                    ):
+                        event(
+                            store,
+                            job,
+                            "scripting",
+                            "Some reference media could not be accessed. Using your feature brief and available references.",
+                            64,
+                        )
+                direction, review = review_film(
+                    direction,
+                    scenes,
+                    folder,
+                    body.theme,
+                    body.duration,
+                    lambda: cancelled(store, job),
+                )
+                job["payload"]["timeline"] = compile_direction(direction, scenes)
+                job["payload"]["direction"] = {
+                    "concept": direction.concept,
+                    "grammar": direction.grammar,
+                    "reference": direction.reference,
+                    "review": review,
+                }
+            event(
+                store,
+                job,
+                "narrating",
+                "Scoring the interactions and arranging the film."
+                if body.voice == "none"
+                else "Generating the voiceover and aligning each scene.",
+                66,
+            )
             finish_render(store, job, folder)
     except InterruptedError:
         pass
@@ -379,7 +515,12 @@ def finish_render(store: Store, job: dict, folder: Path):
     custom = resolve_voice(store, payload["voice"])
     audio_paths = []
     uploaded = payload.get("uploaded_narration") and payload.get("use_uploaded_narration", True)
-    if uploaded:
+    if payload["voice"] == "none":
+        payload["narration_source"] = "Music and interaction sounds"
+        for scene in scenes:
+            scene["narration"] = ""
+        audio_paths = [None] * len(scenes)
+    elif uploaded:
         payload["narration_source"] = "Uploaded recording"
         full_wav = folder / "uploaded.wav"
         ffmpeg("-i", str(folder / "narration-upload"), "-ac", "2", "-ar", "48000", str(full_wav))
@@ -444,7 +585,7 @@ def finish_render(store: Store, job: dict, folder: Path):
             "rendering",
             f"Composing scene {index} of {count}: framing, zooms, captions, and audio."
             if index
-            else "Animating product details, typography, and camera movement.",
+            else "Composing product footage, object motion, typography, and sound.",
             72 + int(index / count * 20),
         )
 
@@ -475,9 +616,15 @@ def finish_render(store: Store, job: dict, folder: Path):
             )
         payload["storage_path"] = f"{store.user_id}/{job['id']}/film.mp4"
     payload["export"] = meta
+    review_status = payload.get("direction", {}).get("review", {}).get("status")
+    if review_status:
+        payload["export"]["review_status"] = review_status
     payload["rendered_scenes"] = scenes
     cancelled(store, job)
-    event(store, job, "complete", "Your film is ready. Review the script or download the MP4.", 100)
+    message = "Your film is ready. Review the script or download the MP4."
+    if review_status in {"needs_review", "unavailable"}:
+        message = "Your draft is ready. Some visual checks still need review before publishing."
+    event(store, job, "complete", message, 100)
 
 
 def prepare_render(store: Store, body: RenderInput) -> dict:

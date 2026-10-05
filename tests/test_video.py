@@ -260,3 +260,31 @@ def test_failed_animation_generation_preserves_existing_film_and_export(store, m
     assert after["payload"]["export"] == {"bytes": 1234}
     assert after["payload"]["assets"][0]["status"] == "failed"
     assert (folder / "film.mp4").read_bytes() == b"existing finished film"
+
+
+def test_reference_brief_is_saved_and_forwarded_to_replanning(store, client, monkeypatch):
+    from server import video_direction
+    from tests.test_video_direction import film, sources
+
+    body = VideoInput(
+        url="https://example.com",
+        demo=True,
+        brief="Show the project board.",
+        creative_direction="Follow the project card",
+        reference_urls=["https://example.com/reference.mp4"],
+    )
+    job = video_service.create_video(store, body)
+    job["payload"]["scenes"] = sources()
+    store.save("video_jobs", job)
+    calls = []
+    monkeypatch.setattr(studio, "capabilities", lambda: {"reasoning": True})
+    monkeypatch.setattr(
+        video_direction,
+        "direct_film",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or film(),
+    )
+    response = client.post(f"/api/videos/{job['id']}/launch-plan")
+    assert response.status_code == 200
+    assert calls[0][0][5] == body.creative_direction
+    assert calls[0][1]["reference_urls"] == body.reference_urls
+    assert store.get("video_jobs", job["id"])["payload"]["reference_urls"] == body.reference_urls

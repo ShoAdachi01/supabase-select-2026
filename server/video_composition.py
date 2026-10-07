@@ -59,6 +59,18 @@ def run_compositor(folder: Path, manifest: Path, checkpoint=None):
                 process.wait()
 
 
+def footage_width(scene: dict, direction: dict | None) -> int:
+    """Decode only the resolution the deepest push-in can show."""
+    zooms = [
+        state.get("cam_zoom", 1)
+        for layer in (direction or {}).get("layers", [])
+        if layer["kind"] == "footage"
+        for state in layer["states"]
+    ] or [1]
+    scale = min(float(scene.get("source_scale", 1)), max(1.0, max(zooms)))
+    return max(1920, int(1920 * scale) // 2 * 2)
+
+
 def prepare_compositions(
     folder: Path,
     raw: Path,
@@ -129,7 +141,7 @@ def prepare_compositions(
             if not re.fullmatch(r"scene-\d{1,2}\.jpg", name):
                 raise ValueError("Invalid directed product asset.")
             with Image.open(folder / name) as image:
-                image.convert("RGB").resize((1920, 1080)).save(product)
+                image.convert("RGB").save(product)
         details = []
         for j, name in enumerate(source.get("details", [])[:3]):
             if not re.fullmatch(r"detail-\d{1,2}-\d\.png", name):
@@ -157,7 +169,7 @@ def prepare_compositions(
                 str(raw),
                 "-an",
                 "-vf",
-                f"setpts=(PTS-STARTPTS)/{speed},fps=30,scale=1920:1080,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}",
+                f"setpts=(PTS-STARTPTS)/{speed},fps=30,scale={footage_width(source, direction)}:-2,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}",
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -167,7 +179,8 @@ def prepare_compositions(
                 str(footage),
             )
         focus = source.get("focus", {"x": 640, "y": 360})
-        viewport = source.get("viewport", {"width": 1280, "height": 720})
+        legacy = source.get("viewport", {"width": 1280, "height": 720})
+        viewport = source.get("viewport", {"width": 1920, "height": 1080})
         jobs.append(
             {
                 "index": i,
@@ -181,9 +194,13 @@ def prepare_compositions(
                 "product": product.name,
                 "details": details,
                 "footage": footage.name if footage else None,
+                "viewport": viewport,
+                "source_scale": float(source.get("source_scale", 1)),
+                "still_scale": float(source.get("still_scale", 1)),
+                "detail_sizes": [list(Image.open(folder / d).size) for d in details],
                 "focus": {
-                    "x": min(0.8, max(0.2, focus["x"] / viewport["width"])),
-                    "y": min(0.8, max(0.2, focus["y"] / viewport["height"])),
+                    "x": min(0.8, max(0.2, focus["x"] / legacy["width"])),
+                    "y": min(0.8, max(0.2, focus["y"] / legacy["height"])),
                 },
             }
         )

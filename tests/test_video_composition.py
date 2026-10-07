@@ -164,3 +164,46 @@ def test_directed_narration_extends_picture_and_graphic_hits_on_the_same_beat_gr
     assert job["direction"]["layers"][0]["states"][-1]["beat"] == 6
     assert job["direction"]["hits"][0]["beat"] == 3
     assert job["footage"] == "motion-footage-0.mp4"
+
+
+def test_directed_jobs_keep_native_stills_and_size_footage_to_zoom(tmp_path, capture, monkeypatch):
+    monkeypatch.setattr(video_composition, "run_compositor", lambda *args: None)
+    calls = []
+    real = video_composition.ffmpeg
+    monkeypatch.setattr(
+        video_composition, "ffmpeg", lambda *args: (calls.append(args), real(*args))[1]
+    )
+    Image.new("RGB", (3840, 2160), "white").save(tmp_path / "scene-0.jpg")
+    direction = {
+        "bpm": 120,
+        "beats": 4,
+        "hits": [],
+        "layers": [
+            {
+                "id": "f",
+                "kind": "footage",
+                "states": [{"beat": 0, "cam_zoom": 1}, {"beat": 2, "cam_zoom": 1.6}],
+            }
+        ],
+    }
+    scenes = [
+        {
+            "kind": "browser",
+            "motion": "directed",
+            "direction": direction,
+            "thumbnail": "scene-0.jpg",
+            "start": 0,
+            "end": 2,
+            "duration": 2,
+            "viewport": {"width": 1920, "height": 1080},
+            "source_scale": 2,
+            "still_scale": 2,
+        }
+    ]
+    video_composition.prepare_compositions(tmp_path, capture, scenes, "paper", [None])
+    job = json.loads((tmp_path / "motion-jobs.json").read_text())["jobs"][0]
+    assert Image.open(tmp_path / job["product"]).size == (3840, 2160)
+    assert job["viewport"] == {"width": 1920, "height": 1080}
+    assert job["source_scale"] == 2 and job["still_scale"] == 2
+    footage_call = next(c for c in calls if str(c[-1]).endswith("motion-footage-0.mp4"))
+    assert "scale=3072:-2" in " ".join(footage_call)

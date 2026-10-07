@@ -60,9 +60,9 @@ Evidence: `.cutroom/verification/prompt-final-latest/openai-studies-8773328a/` a
   times and video frames share one clock.
 
 Acceptance (e2e, measured on a real capture before 2x is relied on): decoded frames are 3840 wide;
-achieved fps ≥ 20; recorded click times still land on the visible interaction (same check as
-`scripts/verify_directed_capture.py` against the 1x path); capture size fits the private storage upload
-limit. If any check fails, the screencast stays at 1x settings and this is reported, not hidden.
+achieved fps ≥ 20; recorded click times still land on the visible interaction (`npm run
+test:interactions`); `raw.webm` fits the 1.2 GB worker budget (it is never uploaded; only `film.mp4`
+and `storyboard.json` go to the 50 MiB-limited bucket, and those stay 1080p). If any check fails, the screencast stays at 1x settings and this is reported, not hidden.
 Render time increase is measured and recorded.
 
 ## §2 Schema and renderer vocabulary
@@ -81,7 +81,11 @@ Keyframed on `MotionState` and carried forward by the existing `inherit_geometry
 
 The renderer draws the source at `zoom` × its fitted size, translated so the focal point sits at the
 layer center. It is clamped so no empty edge ever shows, and interpolated with the same easing as geometry.
-The cap is `max(1.2, measured source_scale)`, i.e. 2.0 for a verified 2x capture and 1.2 at 1x.
+The cap is per source kind: footage uses `max(1.2, measured source_scale)`; product and detail
+stills use `max(1.2, measured still_scale)` (screenshots are already 2x in both capture paths).
+Compositions must keep native resolution (today they downscale everything to 1920×1080).
+`click-N` indexes the scene's `click` interactions in order. `focus` carries forward like geometry;
+an explicit `cam_x`/`cam_y` clears it, and setting `focus` drops inherited camera coordinates.
 
 All layout, readability and click coordinates are **logical CSS pixels** of the recorded
 `scene.viewport`. Physical resolution affects only the zoom cap. `focus: "click-N"` resolves from
@@ -168,8 +172,10 @@ Proof readability · Canvas and scale · Motion intent · Pacing · Typography �
 - 1:1 crops of each text layer's settled rectangle; the click crops from §3.
 
 ### Studio
-`src/components/ReviewDrawer.tsx` shows per-axis scores and open findings for `passed` and
-`needs_review`, with "Another pass" wired to the existing revision action. No new endpoints.
+A new read-only `src/studio/FilmReview.tsx` panel under the film player shows status, per-axis
+scores and open findings. (Correction: `ReviewDrawer.tsx` belongs to the older Trace product, and no
+film-revision action exists today; an "Another pass" button would need a new endpoint and is
+deferred.)
 
 ## §5 Testing and verification
 

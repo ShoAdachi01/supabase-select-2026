@@ -1,6 +1,6 @@
 # Cutroom motion vocabulary and scored critic — design
 
-Status: approved design, pending implementation plan
+Status: approved design, revised after engineering review; pending implementation plan
 Date: 2026-10-07
 Branch: `feat/cutroom-music-led-launch`
 
@@ -35,7 +35,9 @@ Evidence: `.cutroom/verification/prompt-final-latest/openai-studies-8773328a/` a
 ## Non-goals
 
 - Music-led timing (beats derived from a composed track) and a binding reference style spec. These are
-  separate later sub-projects.
+  separate later sub-projects. This spec improves composition and camera; much of the missing
+  excitement is audiovisual rhythm, so music-led timing is the intended next sub-project, not an
+  optional extra.
 - Director-authored code. The director continues to return declarative JSON only. Its input includes
   untrusted web content, so the contract is the security boundary.
 - Blocking export on quality. Below-bar films still export, flagged.
@@ -47,15 +49,21 @@ Evidence: `.cutroom/verification/prompt-final-latest/openai-studies-8773328a/` a
 - Capture byte budget goes from 350 MB to 1.2 GB (sized for 60s at 4K). The 12,000-frame cap is unchanged.
 - `server/video_capture.py` `encode_directed_capture`: encode at 3840×2160 with `libvpx-vp9`,
   CRF 20, `-b:v 0`, `-row-mt 1`. The output filename stays `raw.webm`.
-- Scenes record `source_scale` (2 for the screencast path, 1 for the legacy `recordVideo` path) and the
-  capture's achieved fps.
+- 4K is requested, not assumed. After encoding, the capture measures the actual decoded frame size
+  and records `source_scale = frame_width / viewport_width` (logical CSS viewport, e.g. 1920), plus
+  the achieved fps and bytes. The legacy `recordVideo` path measures the same way (→ 1). The zoom
+  cap (§2) follows the measured value, so a capture that delivers only 1920-wide frames degrades to
+  1x zoom limits instead of producing soft push-ins.
 - The renderer requests footage at a size matched to the visible crop, so unzoomed shots do not
   decode 4K needlessly.
 - Frame timing is unchanged: per-frame durations come from screencast timestamps, so interaction
   times and video frames share one clock.
 
-Risks: the screencast fps may drop at 4K (an e2e check fails below 20 fps); render time increases;
-storage per capture roughly triples (check the private storage upload limit).
+Acceptance (e2e, measured on a real capture before 2x is relied on): decoded frames are 3840 wide;
+achieved fps ≥ 20; recorded click times still land on the visible interaction (same check as
+`scripts/verify_directed_capture.py` against the 1x path); capture size fits the private storage upload
+limit. If any check fails, the screencast stays at 1x settings and this is reported, not hidden.
+Render time increase is measured and recorded.
 
 ## §2 Schema and renderer vocabulary
 
@@ -73,7 +81,11 @@ Keyframed on `MotionState` and carried forward by the existing `inherit_geometry
 
 The renderer draws the source at `zoom` × its fitted size, translated so the focal point sits at the
 layer center. It is clamped so no empty edge ever shows, and interpolated with the same easing as geometry.
-The cap is 2.0 at `source_scale` 2 and 1.2 at `source_scale` 1.
+The cap is `max(1.2, measured source_scale)`, i.e. 2.0 for a verified 2x capture and 1.2 at 1x.
+
+All layout, readability and click coordinates are **logical CSS pixels** of the recorded
+`scene.viewport`. Physical resolution affects only the zoom cap. `focus: "click-N"` resolves from
+the interaction's logical x/y.
 
 ### Continuous drift and parallax
 - Shot-level `drift: {x, y, zoom}`: constant rates over the whole shot (default 0). `x`/`y` are
@@ -98,14 +110,19 @@ The cap is 2.0 at `source_scale` 2 and 1.2 at `source_scale` 1.
 ## §3 Director prompt and validator
 
 ### Validator (`server/video_direction.py`)
-1. **Readability replaces the 65% rule.** Effective scale = `(layer.w × 1920 / source_width) ×
-   cam_zoom` must be ≥ 0.65 whenever live footage is visible. `constrain_geometry` no longer clamps
+1. **Readability replaces the 65% rule.** Effective scale in logical pixels, accounting for the
+   contain fit: `min(layer.w × 1920 / viewport.width, layer.h × 1080 / viewport.height) × cam_zoom`
+   must be ≥ 0.65 whenever live footage is visible. A fullscreen 1920×1080 source scores 1.0
+   regardless of capture resolution. `constrain_geometry` no longer clamps
    footage size; it resolves `focus` references and clamps the camera to valid bounds and the zoom cap.
 2. **Click in frame.** At each recorded click time within a live shot, the click point lies inside
    the visible camera window, with a margin.
 3. **References.** Each `click-N` must exist in the shot's source. `cam_zoom` must be ≤ the cap.
-4. **Dead holds.** A span > 1.2s with no layer state change, zero drift and no live footage playing
-   is rejected.
+4. **Holds are budgeted by reading time, not banned.** A static span (no layer state change, zero
+   drift, no live footage playing) may last up to its reading budget: 0.3s per newly revealed word
+   plus 0.6s, or 2.0s after a proof frame lands, whichever is larger, and at least 1.2s. Only holds
+   beyond the budget are rejected. Drift is never required to satisfy this rule; subtler pacing
+   judgments belong to the critic's Pacing axis.
 5. Footage opacity may fade over ≤ 0.3s at shot edges, but stays 1 during interactions.
 
 ### Director evidence
@@ -131,7 +148,13 @@ Proof readability · Canvas and scale · Motion intent · Pacing · Typography �
 - `passed`: every axis ≥ 8 and no open blocking findings (clipped settled text, a click hidden or
   cropped, unreadable added type).
 - `needs_review`: below the bar after the revision budget. The film still exports.
-- `unavailable`: no usable review, including a score below 10 that has no supporting finding (shot + time).
+- `unavailable`: no usable review, including any axis score without a supporting observation.
+
+### Evidence rule
+- Every axis score carries at least one observation: shot, time and what is visible. Observations
+  may be positive. High scores need evidence as much as low ones.
+- Every axis below 8 also carries at least one actionable finding (problem plus intended change).
+- An axis at 8 or above needs no defect. The critic is not asked to invent criticism of strong work.
 - `reviewed` is replaced by `passed`. The README keeps its honesty wording: "met the rubric on
   sampled frames", not certified quality.
 
@@ -153,20 +176,33 @@ Proof readability · Canvas and scale · Motion intent · Pacing · Typography �
 Deterministic tests (pytest, mocked providers, no credits), written before implementation:
 - Schema: old plans unchanged; camera fields carried forward; `focus` resolution and unknown-click
   rejection; zoom cap follows `source_scale`.
-- Validator: small pushed-in footage passes readability and small unpushed footage fails; a cropped-out click
-  fails; a 1.5s dead hold fails, while drift or playing footage passes.
-- Critic gate: a score without evidence → `unavailable`; a blocking finding → `needs_review` even
-  when all axes ≥ 8; a revision lowering an axis by ≥ 2 is rejected; multiple images reach the reasoner.
-- Capture: synthetic 4K frames encode to 3840×2160 VP9; fps and `source_scale` are recorded.
+- Validator: readability uses logical pixels (fullscreen 2x source scores 1.0; a non-16:9 source uses
+  the contain-fit minimum); small pushed-in footage passes and small unpushed footage fails; a
+  cropped-out click fails; a static hold within its reading budget passes without drift, and one
+  beyond it fails.
+- Critic gate: an axis score without an observation → `unavailable`; an axis below 8 without an
+  actionable finding → `unavailable`; all axes ≥ 8 with only positive observations → `passed`; a
+  blocking finding → `needs_review` even when all axes ≥ 8; a revision lowering an axis by ≥ 2 is
+  rejected; multiple images reach the reasoner.
+- Capture: synthetic 4K frames encode to 3840×2160 VP9; `source_scale` is measured from decoded frames
+  (synthetic 1920-wide frames → 1, and the zoom cap falls to 1.2).
 - Renderer: Remotion stills of fixture plans for camera crop, parallax drift and each shape kind,
   checked with region pixel assertions.
 
 Integration (real credits, run by hand):
-1. A fresh 2x capture of the Cutroom flow; check fps ≥ 20 and compare render time.
+1. A fresh 2x capture of the Cutroom flow; run the §1 acceptance checks (frame size, fps,
+   interaction timing, storage) and record render time against the 1x path.
 2. `scripts/compare_video_prompts.py` with Opus 5.5 and `--review`, into a new folder next to the two
    existing takes.
-3. Calibration: re-score both existing films with the new critic. Both must fall below 8 on canvas
-   and readability; otherwise tighten the anchors before trusting the gate.
+3. Critic discrimination test. Scores are diagnostic evidence, not tuning targets:
+   - Score an independently selected strong film that is not used as a director reference, alongside
+     the gpt and Opus takes. Frame-based axes only for the external film (it has no capture
+     metadata, so readability/click blocking checks do not apply).
+   - Score each film 3 times to measure run-to-run variance.
+   - The rubric is trusted only if the strong film ranks clearly above both takes on the visual
+     axes by more than the observed variance. Anchors are not adjusted to make particular films
+     fail; if the rubric does not discriminate, the anchors are rewritten and the test re-run on
+     the same set.
 4. Watch all three films side by side.
 
 Then `npm test`, `npm run lint`, `npm run build`.

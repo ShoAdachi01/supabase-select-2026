@@ -12,6 +12,9 @@ import {
   cancelRender,
 } from 'remotion';
 import '@fontsource-variable/inter';
+import '@fontsource/instrument-serif/400.css';
+import '@fontsource-variable/jetbrains-mono';
+import { contentBox, drifted, project } from './camera';
 import type { ShotProps } from './LaunchShot';
 
 export type MotionState = {
@@ -23,6 +26,11 @@ export type MotionState = {
   radius: number;
   rotation: number;
   opacity: number;
+  cam_x?: number;
+  cam_y?: number;
+  cam_zoom?: number;
+  focus?: string | null;
+  elevation?: number;
   ease: 'spring' | 'smooth' | 'linear' | 'hold';
 };
 export type MotionLayer = {
@@ -35,6 +43,16 @@ export type MotionLayer = {
   weight: number;
   align: 'left' | 'center' | 'right';
   entrance: 'none' | 'words' | 'mask' | 'type';
+  depth?: number;
+  shape?: 'rect' | 'line' | 'segments' | 'ring';
+  stroke?: number;
+  count?: number;
+  gap?: number;
+  font?: 'sans' | 'display' | 'mono';
+  target_layer?: string | null;
+  target?: string | null;
+  target_x?: number | null;
+  target_y?: number | null;
 };
 export type ShotDirection = {
   purpose: string;
@@ -45,7 +63,31 @@ export type ShotDirection = {
   beats: number;
   layers: MotionLayer[];
   hits: { beat: number; kind: 'whoosh' | 'thump' | 'tick' }[];
+  drift?: { x: number; y: number; zoom: number };
+  backdrop?: {
+    kind: 'flat' | 'radial';
+    x: number;
+    y: number;
+    color2: string | null;
+    grain: number;
+  };
 };
+
+const FONTS = {
+  sans: { family: 'Inter Variable', weight: null, spacing: '-.045em' },
+  display: { family: 'Instrument Serif', weight: 400, spacing: '-.02em' },
+  mono: { family: 'JetBrains Mono Variable', weight: null, spacing: '0' },
+} as const;
+const NO_DRIFT = { x: 0, y: 0, zoom: 0 };
+
+type Camera = MotionState & { cam_x: number; cam_y: number; cam_zoom: number; elevation: number };
+const withCamera = (state: MotionState): Camera => ({
+  ...state,
+  cam_x: state.cam_x ?? 0.5,
+  cam_y: state.cam_y ?? 0.5,
+  cam_zoom: state.cam_zoom ?? 1,
+  elevation: state.elevation ?? 0,
+});
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const smooth = (t: number) => {
@@ -54,11 +96,11 @@ const smooth = (t: number) => {
 };
 
 // Every state is a pure function of the requested frame. No wall clock or CSS animation.
-function stateAt(layer: MotionLayer, frame: number, fps: number, bpm: number): MotionState {
+function stateAt(layer: MotionLayer, frame: number, fps: number, bpm: number): Camera {
   const beatFrame = (fps * 60) / bpm;
   const next = layer.states.findIndex((s) => s.beat * beatFrame > frame);
-  if (next < 0) return layer.states[layer.states.length - 1];
-  if (next === 0) return layer.states[0];
+  if (next < 0) return withCamera(layer.states[layer.states.length - 1]);
+  if (next === 0) return withCamera(layer.states[0]);
   const from = layer.states[next - 1];
   const to = layer.states[next];
   const local = frame - from.beat * beatFrame;
@@ -77,9 +119,23 @@ function stateAt(layer: MotionLayer, frame: number, fps: number, bpm: number): M
               config: { damping: 22, stiffness: 170, mass: 0.8, overshootClamping: true },
             })
           : smooth(ratio);
-  const state = { ...from };
-  for (const property of ['x', 'y', 'w', 'h', 'radius', 'rotation', 'opacity'] as const)
-    state[property] = from[property] + (to[property] - from[property]) * progress;
+  const a = withCamera(from);
+  const b = withCamera(to);
+  const state = { ...a };
+  for (const property of [
+    'x',
+    'y',
+    'w',
+    'h',
+    'radius',
+    'rotation',
+    'opacity',
+    'cam_x',
+    'cam_y',
+    'cam_zoom',
+    'elevation',
+  ] as const)
+    state[property] = a[property] + (b[property] - a[property]) * progress;
   return state;
 }
 
@@ -133,6 +189,55 @@ function Type({ layer, frame, fps }: { layer: MotionLayer; frame: number; fps: n
   );
 }
 
+function ShapeBody({
+  shape,
+  color,
+  stroke,
+  count,
+  gap,
+  vertical,
+}: {
+  shape: NonNullable<MotionLayer['shape']>;
+  color: string;
+  stroke: number;
+  count: number;
+  gap: number;
+  vertical: boolean;
+}) {
+  if (shape === 'line')
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          background: color,
+          ...(vertical
+            ? { left: '50%', top: 0, bottom: 0, width: stroke, marginLeft: -stroke / 2 }
+            : { top: '50%', left: 0, right: 0, height: stroke, marginTop: -stroke / 2 }),
+        }}
+      />
+    );
+  if (shape === 'segments')
+    return (
+      <div style={{ display: 'flex', flexDirection: vertical ? 'column' : 'row', height: '100%' }}>
+        {Array.from({ length: Math.max(1, count) }, (_, i) => (
+          <div
+            key={i}
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'stretch',
+              justifyContent: 'center',
+              flexDirection: vertical ? 'column' : 'row',
+            }}
+          >
+            <div style={{ background: color, flex: `0 0 ${(1 - gap) * 100}%` }} />
+          </div>
+        ))}
+      </div>
+    );
+  return null;
+}
+
 export function DirectedShot(props: ShotProps) {
   const frame = useCurrentFrame();
   const { fps, durationInFrames } = useVideoConfig();
@@ -140,8 +245,11 @@ export function DirectedShot(props: ShotProps) {
   const [fontReady, setFontReady] = useState(false);
   const [fontHandle] = useState(() => delayRender('Loading motion typography'));
   useEffect(() => {
-    document.fonts
-      .load('600 100px "Inter Variable"')
+    Promise.all([
+      document.fonts.load('600 100px "Inter Variable"'),
+      document.fonts.load('400 100px "Instrument Serif"'),
+      document.fonts.load('500 100px "JetBrains Mono Variable"'),
+    ])
       .then(() => {
         setFontReady(true);
         continueRender(fontHandle);
@@ -153,17 +261,33 @@ export function DirectedShot(props: ShotProps) {
   // Reach the exact terminal geometry at the final encoded frame for reliable match cuts.
   const clock =
     frame === durationInFrames - 1 ? (direction.beats * fps * 60) / direction.bpm : frame;
+  const drift = direction.drift ?? NO_DRIFT;
+  const backdrop = direction.backdrop;
+  const background =
+    backdrop?.kind === 'radial' && backdrop.color2
+      ? `radial-gradient(circle at ${backdrop.x * 100}% ${backdrop.y * 100}%, ${backdrop.color2} 0%, ${direction.background} 70%)`
+      : direction.background;
+  const seconds = clock / fps;
+  const aspectOf = (kind: MotionLayer['kind']): readonly [number, number] =>
+    kind.startsWith('detail-')
+      ? (props.detail_sizes?.[Number(kind.slice(-1))] ?? [1920, 1080])
+      : [props.viewport?.width ?? 1920, props.viewport?.height ?? 1080];
+  const placed = (layer: MotionLayer) =>
+    drifted(stateAt(layer, clock, fps, direction.bpm), drift, layer.depth ?? 1, seconds);
   return (
     <AbsoluteFill
       style={{
-        background: direction.background,
+        background,
         overflow: 'hidden',
         fontFamily: 'Inter Variable, sans-serif',
       }}
     >
       {direction.layers.map((layer) => {
-        const s = stateAt(layer, clock, fps, direction.bpm);
+        const s = placed(layer);
+        const font = FONTS[layer.font ?? 'sans'];
+        const fontWeight = font.weight ?? layer.weight;
         const isText = layer.kind === 'text';
+        const shape = layer.shape ?? 'rect';
         const style: React.CSSProperties = {
           position: 'absolute',
           left: s.x * 1920,
@@ -174,7 +298,39 @@ export function DirectedShot(props: ShotProps) {
           opacity: s.opacity,
           transform: `rotate(${s.rotation}deg)`,
           overflow: isText ? 'visible' : 'hidden',
-          background: layer.kind === 'shape' ? layer.color : undefined,
+          background: layer.kind === 'shape' && shape === 'rect' ? layer.color : undefined,
+          boxShadow:
+            s.elevation > 0
+              ? `0 ${s.elevation * 40}px ${s.elevation * 90}px rgba(0,0,0,${0.12 + s.elevation * 0.22}), 0 ${s.elevation * 6}px ${s.elevation * 14}px rgba(0,0,0,${0.08 + s.elevation * 0.1})`
+              : undefined,
+        };
+        const stroke = layer.stroke ?? 4;
+        if (layer.kind === 'shape' && shape === 'ring') {
+          style.background = 'transparent';
+          style.border = `${stroke}px solid ${layer.color}`;
+          style.boxSizing = 'border-box';
+          style.overflow = 'visible';
+          const target = direction.layers.find((l) => l.id === layer.target_layer);
+          if (target && layer.target_x != null && layer.target_y != null) {
+            const at = project(
+              placed(target),
+              aspectOf(target.kind),
+              layer.target_x,
+              layer.target_y,
+            );
+            style.left = at.x * 1920 - (s.w * 1920) / 2;
+            style.top = at.y * 1080 - (s.h * 1080) / 2;
+          }
+        }
+        const inner = (l: MotionLayer, st: Camera): React.CSSProperties => {
+          const box = contentBox(st, aspectOf(l.kind));
+          return {
+            position: 'absolute',
+            left: box.left,
+            top: box.top,
+            width: box.width,
+            height: box.height,
+          };
         };
         const src = layer.kind.startsWith('detail-')
           ? props.details[Number(layer.kind.slice(-1))]
@@ -208,9 +364,9 @@ export function DirectedShot(props: ShotProps) {
           ? paragraphs.map((text) =>
               fitTextOnNLines({
                 text: text.replace(/\s+/g, ' '),
-                fontFamily: 'Inter Variable',
-                fontWeight: layer.weight,
-                letterSpacing: '-.045em',
+                fontFamily: font.family,
+                fontWeight,
+                letterSpacing: font.spacing,
                 maxBoxWidth: Math.max(1, s.w * 1920 - 8),
                 maxLines: Math.max(1, Math.floor(maxLines / paragraphs.length)),
                 maxFontSize: Math.min(layer.size, (s.h * 1080) / (Math.max(1, maxLines) * 1.08)),
@@ -231,10 +387,11 @@ export function DirectedShot(props: ShotProps) {
                 style={{
                   color: layer.color,
                   fontSize: textLayout!.fontSize,
-                  fontWeight: layer.weight,
+                  fontFamily: `"${font.family}", sans-serif`,
+                  fontWeight,
                   textAlign: layer.align,
                   lineHeight: 1.08,
-                  letterSpacing: '-.045em',
+                  letterSpacing: font.spacing,
                   overflowWrap: 'break-word',
                 }}
               >
@@ -248,18 +405,43 @@ export function DirectedShot(props: ShotProps) {
                   </div>
                 ))}
               </div>
-            ) : layer.kind === 'shape' ? null : layer.kind === 'footage' && props.footage ? (
-              <OffthreadVideo
-                src={props.footage}
-                muted
-                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+            ) : layer.kind === 'shape' ? (
+              <ShapeBody
+                shape={shape}
+                color={layer.color}
+                stroke={stroke}
+                count={layer.count ?? 8}
+                gap={layer.gap ?? 0.4}
+                vertical={s.h > s.w}
               />
+            ) : layer.kind === 'footage' && props.footage ? (
+              <div style={inner(layer, s)}>
+                <OffthreadVideo
+                  src={props.footage}
+                  muted
+                  style={{ width: '100%', height: '100%' }}
+                />
+              </div>
             ) : src ? (
-              <Img src={src} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              <div style={inner(layer, s)}>
+                <Img src={src} style={{ width: '100%', height: '100%' }} />
+              </div>
             ) : null}
           </div>
         );
       })}
+      {backdrop && backdrop.grain > 0 ? (
+        <svg
+          width="100%"
+          height="100%"
+          style={{ position: 'absolute', inset: 0, mixBlendMode: 'overlay', pointerEvents: 'none' }}
+        >
+          <filter id="g">
+            <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed={frame} />
+          </filter>
+          <rect width="100%" height="100%" filter="url(#g)" opacity={backdrop.grain} />
+        </svg>
+      ) : null}
     </AbsoluteFill>
   );
 }

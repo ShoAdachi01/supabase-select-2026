@@ -16,6 +16,10 @@ export type ShotProps = {
   interactive?: boolean;
   focus?: { x: number; y: number };
   direction?: ShotDirection;
+  viewport?: { width: number; height: number };
+  source_scale?: number;
+  still_scale?: number;
+  detail_sizes?: [number, number][];
 };
 
 const clamp = (n: number) => Math.min(1, Math.max(0, n));

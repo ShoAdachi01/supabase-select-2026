@@ -13,7 +13,8 @@ from pathlib import Path
 import imageio_ffmpeg
 from PIL import Image, ImageDraw
 
-from server.video_direction_models import FilmDirection, FilmTreatment
+from server.video_camera import click_point, clicks, effective_scale, resolve_focus, visible_window
+from server.video_direction_models import FilmDirection, FilmTreatment, MotionState
 from server.video_models import TimelineClip
 from server.video_prompts import PROMPT_VERSION, TREATMENT, enriched_prompt
 from server.video_providers import ProviderError, reason, setting
@@ -128,11 +129,10 @@ def evidence_scenes(scenes: list[dict]) -> list[dict]:
     return [s for s in scenes if s.get("action") != "overview"][:8]
 
 
-def constrain_geometry(plan: FilmDirection) -> FilmDirection:
-    """Project live takes into a readable safe viewport, preserving the chosen composition.
+def constrain_geometry(plan: FilmDirection, scenes: list[dict] | None = None) -> FilmDirection:
+    """Resolve click focus and clamp the camera, preserving the director's composition.
 
-    Layout constraints belong in the renderer contract rather than consuming model retries
-    for a screen that is a few pixels too small. Stills retain expressive off-screen motion.
+    Footage keeps the size the director chose; readability is measured by validate_evidence.
     """
     plan = plan.model_copy(deep=True)
     # Reusing a capture as an animated background must not replay the same interaction.
@@ -157,18 +157,74 @@ def constrain_geometry(plan: FilmDirection) -> FilmDirection:
                     for layer in shot.layers:
                         if layer.kind == "footage":
                             layer.kind = "product"
+    if scenes is not None:
+        plan = resolve_focus(plan, {s["thumbnail"]: s for s in evidence_scenes(scenes)})
     for shot in plan.shots:
         for layer in shot.layers:
-            if layer.kind != "footage":
-                continue
-            for state in layer.states:
-                state.w = min(1, max(0.65, state.w))
-                state.h = min(1, max(0.65, state.h))
-                state.x = min(1 - state.w, max(0, state.x))
-                state.y = min(1 - state.h, max(0, state.y))
-                state.opacity = 1
-                state.rotation = 0
+            if layer.kind == "footage":
+                for state in layer.states:
+                    state.rotation = 0
     return plan
+
+
+def click_seconds(shot, source: dict) -> list[tuple[str, float]]:
+    """Shot-local seconds of each recorded click, using the composition's speed rule."""
+    duration = shot.beats * 60 / shot.bpm
+    speed = max(1, max(0.4, source["end"] - source["start"]) / duration)
+    return [
+        (f"click-{i}", (e["time"] - source["start"]) / speed)
+        for i, e in enumerate(clicks(source))
+        if source["start"] <= e["time"] < source["end"]
+    ]
+
+
+GEOMETRY = ("x", "y", "w", "h", "radius", "rotation", "opacity", "cam_x", "cam_y", "cam_zoom")
+
+
+def moving_spans(shot) -> list[tuple[float, float, str]]:
+    """Beat intervals where a layer changes, tagged with the layer kind."""
+    spans = []
+    for layer in shot.layers:
+        for a, b in zip(layer.states, layer.states[1:], strict=False):
+            if b.ease != "hold" and any(getattr(a, k) != getattr(b, k) for k in GEOMETRY):
+                spans.append((a.beat, b.beat, layer.kind))
+        if layer.kind == "text" and layer.entrance != "none":
+            first = next((s.beat for s in layer.states if s.opacity > 0.5), None)
+            if first is not None:
+                spans.append((first, first + 0.8 * shot.bpm / 60, "text"))
+    return sorted(spans)
+
+
+def static_spans(shot) -> list[tuple[float, float]]:
+    drift = shot.drift
+    if any(layer.kind == "footage" for layer in shot.layers) or any((drift.x, drift.y, drift.zoom)):
+        return []
+    gaps, cursor = [], 0.0
+    for start, end, _ in moving_spans(shot):
+        if start > cursor:
+            gaps.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < shot.beats:
+        gaps.append((cursor, shot.beats))
+    return gaps
+
+
+def hold_budget(shot, start_beat: float) -> float:
+    words = sum(
+        len(layer.text.split())
+        for layer in shot.layers
+        if layer.kind == "text"
+        and (first := next((s.beat for s in layer.states if s.opacity > 0.5), None)) is not None
+        and first <= start_beat
+    )
+    landed = any(
+        end == start_beat and kind not in ("text", "shape") for _, end, kind in moving_spans(shot)
+    )
+    return max(1.2, 0.3 * words + 0.6, 2.0 if landed else 0)
+
+
+def layout_state(layer, beat: float) -> MotionState:
+    return MotionState.model_validate({**layout_at(layer, beat), "beat": beat})
 
 
 def layout_at(layer, beat: float) -> dict:
@@ -182,7 +238,7 @@ def layout_at(layer, beat: float) -> dict:
                 t = t * t * (3 - 2 * t)
             return {
                 key: getattr(before, key) + t * (getattr(after, key) - getattr(before, key))
-                for key in ("x", "y", "w", "h", "opacity")
+                for key in GEOMETRY
             }
     return layer.states[-1].model_dump()
 
@@ -242,22 +298,58 @@ def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> l
                 issues.append(
                     f"{prefix}: hold at least {min(needed, 12):.2f}s to show the interaction."
                 )
-            if any(
-                s.opacity < 0.98
-                or s.w < 0.65
-                or s.h < 0.65
-                or s.x < 0
-                or s.y < 0
-                or s.x + s.w > 1.01
-                or s.y + s.h > 1.01
-                for s in footage[0].states
-            ):
-                issues.append(
-                    f"{prefix}: keep live footage large, inside the canvas and fully opaque; use stills for expressive entrances."
-                )
+            view = source.get("viewport", {"width": 1920, "height": 1080})
+            seconds = shot.beats * 60 / shot.bpm
+            beats_per_second = shot.bpm / 60
+            for state in footage[0].states:
+                if state.opacity > 0.5 and effective_scale(state, view) < 0.65:
+                    issues.append(
+                        f"{prefix}: live footage is not readable at beat {state.beat:g} "
+                        f"(scale {effective_scale(state, view):.2f} < 0.65). Enlarge it or push the camera in."
+                    )
+                    break
+                edge = min(state.beat, shot.beats - state.beat) / beats_per_second
+                if state.opacity < 0.98 and edge > 0.3:
+                    issues.append(f"{prefix}: footage may only fade within 0.3s of a shot edge.")
+                    break
+            recorded = clicks(source)
+            for name, at in click_seconds(shot, source):
+                if not 0 <= at < seconds or "x" not in recorded[int(name[6:])]:
+                    continue
+                state = layout_state(footage[0], at * beats_per_second)
+                left, top, width, height = visible_window(state, (view["width"], view["height"]))
+                px, py = click_point(source, name)
+                margin = 0.04
+                if not (
+                    left + margin * width <= px <= left + width * (1 - margin)
+                    and top + margin * height <= py <= top + height * (1 - margin)
+                ):
+                    issues.append(
+                        f"{prefix}: {name} happens outside the camera frame at {at:.2f}s. Keep the action in view."
+                    )
+                if state.opacity < 0.98:
+                    issues.append(f"{prefix}: footage must be opaque while {name} happens.")
         words = sum(len(layer.text.split()) for layer in shot.layers if layer.kind == "text")
         if words > 8:
             issues.append(f"{prefix}: at most 8 on-screen words.")
+        for start, end in static_spans(shot):
+            seconds_static = (end - start) * 60 / shot.bpm
+            budget = hold_budget(shot, start)
+            if seconds_static > budget + 1e-6:
+                issues.append(
+                    f"{prefix}: frame holds static for {seconds_static:.2f}s from beat {start:g}; "
+                    f"its reading budget is {budget:.2f}s. Shorten the hold, add a purposeful move, or cut."
+                )
+        ids = {layer.id for layer in shot.layers}
+        for layer in shot.layers:
+            if layer.target_layer is not None and (
+                layer.kind != "shape" or layer.target_layer not in ids - {layer.id}
+            ):
+                issues.append(
+                    f"{prefix}: {layer.id} target_layer {layer.target_layer} must be a shape pointing at another layer in this shot."
+                )
+            if layer.target is not None and layer.target_layer is None:
+                issues.append(f"{prefix}: {layer.id} target needs a target_layer.")
         for layer in shot.layers:
             if layer.kind.startswith("detail-") and int(layer.kind[-1]) >= len(
                 source.get("details", [])
@@ -541,8 +633,14 @@ def direct_film(
             )
             previous = json.dumps(proposed)
             (folder / f"director-proposal-{attempt}.json").write_text(previous)
-            plan = constrain_geometry(FilmDirection.model_validate(proposed))
+            plan = constrain_geometry(FilmDirection.model_validate(proposed), scenes)
             errors = validate_evidence(plan, scenes, target)
+            if any(
+                layer.get("target_x") is not None or layer.get("target_y") is not None
+                for shot in proposed.get("shots", [])
+                for layer in shot.get("layers", [])
+            ):
+                errors.append("target_x/target_y are set by Cutroom; use target")
             if not errors:
                 save_direction(folder, plan)
                 return plan
@@ -684,7 +782,7 @@ def review_film(
                     effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
                 )
             )
-            revised = constrain_geometry(revised)
+            revised = constrain_geometry(revised, scenes)
             issues = validate_evidence(revised, scenes, target)
             if issues:
                 report["passes"][-1]["rejected_revision"] = issues

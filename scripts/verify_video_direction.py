@@ -65,7 +65,7 @@ def main():
     (args.output / "source-scenes.json").write_text(json.dumps(scenes, indent=2))
     print("Directing from captured evidence...", flush=True)
     if args.plan:
-        plan = constrain_geometry(FilmDirection.model_validate_json(args.plan.read_text()))
+        plan = constrain_geometry(FilmDirection.model_validate_json(args.plan.read_text()), scenes)
         issues = validate_evidence(plan, scenes, 30)
         if issues:
             raise ValueError(issues)

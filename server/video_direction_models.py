@@ -44,7 +44,7 @@ class MotionLayer(Contract):
     stroke: int = Field(default=4, ge=1, le=40)
     count: int = Field(default=8, ge=2, le=40)
     gap: float = Field(default=0.4, ge=0, le=0.9)
-    target_layer: str | None = Field(default=None)
+    target_layer: str | None = Field(default=None, max_length=40, pattern=r"^[\w-]+$")
     target: str | None = Field(default=None, pattern=CLICK)
     target_x: float | None = Field(default=None, ge=0, le=1)
     target_y: float | None = Field(default=None, ge=0, le=1)

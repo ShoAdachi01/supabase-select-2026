@@ -98,7 +98,7 @@ def test_director_can_choose_structure_without_inserting_opening_or_closing_card
         (lambda p: setattr(p.shots[1].layers[0].states[0], "x", 0.1), "match-cut geometry"),
         (lambda p: setattr(p.shots[1].layers[0], "kind", "detail-0"), "was not captured"),
         (lambda p: setattr(p.shots[1], "bpm", 150), "one BPM"),
-        (lambda p: setattr(p.shots[0].layers[0].states[0], "opacity", 0), "fully opaque"),
+        (lambda p: setattr(p.shots[0].layers[0].states[1], "opacity", 0.6), "may only fade"),
     ],
 )
 def test_invalid_evidence_and_continuity_are_rejected(mutation, expected):
@@ -292,12 +292,14 @@ def test_browser_director_repairs_unsupported_actions_before_execution(monkeypat
     assert action == {"type": "click", "id": 7}
 
 
-def test_live_geometry_is_constrained_without_replacing_the_composition():
+def test_live_geometry_keeps_the_directors_size_and_clamps_only_the_camera():
     plan = film()
     plan.shots[0].layers[0].states[0].w = 0.5
-    fitted = director.constrain_geometry(plan)
-    assert fitted.shots[0].layers[0].states[0].w == 0.65
-    assert plan.shots[0].layers[0].states[0].w == 0.5
+    plan.shots[0].layers[0].states[0].cam_zoom = 2
+    fitted = director.constrain_geometry(plan, sources())
+    assert fitted.shots[0].layers[0].states[0].w == 0.5
+    assert fitted.shots[0].layers[0].states[0].cam_zoom == 1.2  # 1x capture cap
+    assert plan.shots[0].layers[0].states[0].cam_zoom == 2
     assert fitted.shots[0].composition == plan.shots[0].composition
 
 
@@ -359,3 +361,117 @@ def test_switching_off_directed_motion_also_disables_its_graphic_audio():
     assert motion_schedule(clips) == []
     assert len(interaction_schedule(clips)) == 2
     assert beat_map(clips, 6)["bpm"] == 150
+
+
+def with_footage_state(**state):
+    data = film().model_dump()
+    for shot in data["shots"]:
+        shot["layers"][0]["states"] = [
+            {**dict(beat=0, x=0, y=0, w=1, h=1), **state},
+            dict(beat=6, **state),
+        ]
+    return FilmDirection.model_validate(data)
+
+
+def scaled(scale=2, x=480, y=270):
+    out = sources()
+    for s in out:
+        s.update(viewport={"width": 1920, "height": 1080}, source_scale=scale, still_scale=2)
+        s["interactions"][0].update(x=x, y=y)
+    return out
+
+
+def test_small_footage_fails_readability_unless_pushed_in():
+    scenes = scaled()
+    small = with_footage_state(x=0.25, y=0.25, w=0.5, h=0.5)
+    issues = director.validate_evidence(director.constrain_geometry(small, scenes), scenes, 30)
+    assert any("readable" in i for i in issues)
+    pushed = with_footage_state(x=0.25, y=0.25, w=0.5, h=0.5, cam_zoom=1.5, focus="click-0")
+    assert not any(
+        "readable" in i
+        for i in director.validate_evidence(director.constrain_geometry(pushed, scenes), scenes, 30)
+    )
+
+
+def test_push_in_that_crops_out_the_click_is_rejected():
+    scenes = scaled(x=1800, y=1000)
+    plan = with_footage_state(cam_zoom=2, cam_x=0.1, cam_y=0.1)
+    issues = director.validate_evidence(director.constrain_geometry(plan, scenes), scenes, 30)
+    assert any("click-0" in i and "frame" in i for i in issues)
+
+
+def test_reading_hold_is_allowed_without_drift_but_dead_air_is_not():
+    data = film().model_dump()
+    graphic = dict(
+        source="scene-0.jpg",
+        label="Line",
+        purpose="State the promise in type.",
+        composition="type",
+        bpm=120,
+        beats=8,
+        layers=[
+            dict(
+                id="t",
+                kind="text",
+                text="Edit every word",
+                entrance="words",
+                states=[
+                    dict(beat=0, x=0.1, y=0.3, w=0.8, h=0.3, opacity=0),
+                    dict(beat=0.5, opacity=1),
+                ],
+            ),
+        ],
+    )
+    data["shots"].insert(1, {**graphic, "beats": 4})
+    plan = FilmDirection.model_validate(data)
+    ((start, end),) = director.static_spans(plan.shots[1])
+    assert director.hold_budget(plan.shots[1], start) == pytest.approx(1.5)  # 3 words
+    issues = director.validate_evidence(plan, sources(), 30)
+    assert not any("holds static" in i for i in issues)  # 0.95s reading hold, no drift needed
+    data["shots"][1]["beats"] = 8
+    issues = director.validate_evidence(FilmDirection.model_validate(data), sources(), 30)
+    assert any("holds static" in i for i in issues)  # 2.95s of the same line
+
+
+def shape_plan(**layer):
+    data = film().model_dump()
+    data["shots"][0]["layers"].append(
+        dict(id="ring", kind="shape", states=[dict(beat=0, x=0.4, y=0.4, w=0.1, h=0.1)], **layer)
+    )
+    return FilmDirection.model_validate(data)
+
+
+def test_shape_target_layer_must_name_another_layer_in_the_shot():
+    from server.video_direction_models import MotionLayer
+
+    for bad in ("../x", "a b", "x" * 41):
+        with pytest.raises(ValidationError):
+            MotionLayer.model_validate(
+                dict(id="r", kind="shape", target_layer=bad, states=[dict(beat=0)])
+            )
+    issues = director.validate_evidence(shape_plan(target_layer="ghost"), sources(), 30)
+    assert any("target_layer" in i and "ghost" in i for i in issues)
+    ok = director.validate_evidence(shape_plan(target_layer="product"), sources(), 30)
+    assert not any("target_layer" in i for i in ok)
+
+
+def test_shape_target_requires_target_layer():
+    issues = director.validate_evidence(shape_plan(target="click-0"), sources(), 30)
+    assert any("target" in i and "target_layer" in i for i in issues)
+
+
+def test_director_rejects_model_supplied_target_coordinates(tmp_path, monkeypatch):
+    for scene in sources():
+        Image.new("RGB", (320, 180), "blue").save(tmp_path / scene["thumbnail"])
+    invalid = film().model_dump()
+    invalid["shots"][0]["layers"][0]["target_x"] = 0.5
+    answers = iter([invalid, film().model_dump()])
+    calls = []
+    monkeypatch.setattr(
+        director, "reason", lambda *args, **kwargs: calls.append(args) or next(answers)
+    )
+    result = director.direct_film(
+        "Product", "Show both features", sources(), tmp_path, strategy="baseline"
+    )
+    assert result == film()
+    assert "target_x/target_y are set by Cutroom; use target" in calls[1][0]

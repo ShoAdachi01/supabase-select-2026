@@ -362,3 +362,108 @@ def test_failed_source_decode_cannot_reuse_a_stale_frame(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="source frames"):
         director.source_frames(tmp_path, sources())
     assert not (tmp_path / "source-0-start.jpg").exists()
+
+
+def claude_settings(name, default=""):
+    return {"ANTHROPIC_API_KEY": "sk-ant-secret", "CUTROOM_DIRECTOR": "claude"}.get(name, default)
+
+
+def test_claude_output_budget_exhaustion_is_retried_without_parsing_truncated_json(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "stop_reason": "max_tokens",
+                    "usage": {"output_tokens": 18000},
+                    "content": [{"type": "text", "text": '{"shots": [{"beat'}],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "usage": {"output_tokens": 9000},
+                "content": [{"type": "text", "text": '{"ready": true}'}],
+            },
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    telemetry = {}
+    assert providers.reason(
+        "Compose the film", motion=True, max_tokens=10000, telemetry=telemetry
+    ) == {"ready": True}
+    assert calls[0]["max_tokens"] == 18000
+    assert calls[1]["max_tokens"] == 32000
+    assert calls[0]["messages"] == calls[1]["messages"]
+    assert len(telemetry["usage_attempts"]) == 2
+
+
+def test_repeated_claude_truncation_stops_without_a_partial_plan(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "max_tokens",
+                "usage": {"output_tokens": kwargs["json"]["max_tokens"]},
+                "content": [{"type": "text", "text": "{"}],
+            },
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    telemetry = {}
+    with pytest.raises(providers.ProviderError, match="No partial film plan"):
+        providers.reason("Compose", motion=True, telemetry=telemetry)
+    assert len(calls) == 2
+    assert len(telemetry["usage_attempts"]) == 2
+
+
+def test_reasoning_errors_explain_the_provider_message_without_credentials(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    message = "This API key is not scoped to a workspace. Key sk-ant-secret rejected. " + "x" * 600
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kwargs: httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": message}},
+        ),
+    )
+    with pytest.raises(providers.ProviderError) as raised:
+        providers.reason("Compose")
+    text = str(raised.value)
+    assert "Claude returned 400" in text
+    assert "not scoped to a workspace" in text
+    assert "sk-ant-secret" not in text
+    assert len(text) < 420
+
+
+def test_non_reasoning_provider_bodies_stay_private():
+    response = httpx.Response(400, json={"error": {"message": "echoed secret audio"}})
+    with pytest.raises(providers.ProviderError) as raised:
+        providers.checked(response, "OpenAI speech")
+    assert "echoed" not in str(raised.value)
+
+
+def test_claude_motion_defaults_to_opus(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(
+            200, json={"stop_reason": "end_turn", "content": [{"type": "text", "text": "{}"}]}
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    providers.reason("Compose", motion=True)
+    assert calls[0]["model"] == "claude-opus-5-5"
+    assert calls[0]["output_config"] == {"effort": "high"}

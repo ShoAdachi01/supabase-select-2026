@@ -4,6 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+CLICK = r"^click-\d{1,2}$"
+HEX = r"^#[0-9a-fA-F]{6}$"
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -18,6 +21,11 @@ class MotionState(Contract):
     radius: float = Field(default=0, ge=0, le=540)
     rotation: float = Field(default=0, ge=-30, le=30)
     opacity: float = Field(default=1, ge=0, le=1)
+    cam_x: float = Field(default=0.5, ge=0, le=1)
+    cam_y: float = Field(default=0.5, ge=0, le=1)
+    cam_zoom: float = Field(default=1, ge=1, le=2)
+    focus: str | None = Field(default=None, pattern=CLICK)
+    elevation: float = Field(default=0, ge=0, le=1)
     ease: Literal["spring", "smooth", "linear", "hold"] = "smooth"
 
 
@@ -31,6 +39,16 @@ class MotionLayer(Contract):
     weight: Literal[400, 500, 600, 700, 800] = 600
     align: Literal["left", "center", "right"] = "left"
     entrance: Literal["none", "words", "mask", "type"] = "none"
+    depth: float = Field(default=1, ge=0, le=1)
+    shape: Literal["rect", "line", "segments", "ring"] = "rect"
+    stroke: int = Field(default=4, ge=1, le=40)
+    count: int = Field(default=8, ge=2, le=40)
+    gap: float = Field(default=0.4, ge=0, le=0.9)
+    target_layer: str | None = Field(default=None)
+    target: str | None = Field(default=None, pattern=CLICK)
+    target_x: float | None = Field(default=None, ge=0, le=1)
+    target_y: float | None = Field(default=None, ge=0, le=1)
+    font: Literal["sans", "display", "mono"] = "sans"
 
     @model_validator(mode="before")
     @classmethod
@@ -41,7 +59,13 @@ class MotionLayer(Contract):
         for state in value["states"]:
             if not isinstance(state, dict):
                 return value
-            current = {**previous, **state}
+            inherited = dict(previous)
+            if "cam_x" in state or "cam_y" in state:
+                inherited.pop("focus", None)
+            if "focus" in state:
+                inherited.pop("cam_x", None)
+                inherited.pop("cam_y", None)
+            current = {**inherited, **state}
             states.append(current)
             previous = {k: v for k, v in current.items() if k not in ("beat", "ease")}
         if states and isinstance(states[0].get("beat"), (int, float)) and states[0]["beat"] > 0:
@@ -63,6 +87,20 @@ class MotionHit(Contract):
     kind: Literal["whoosh", "thump", "tick"]
 
 
+class Drift(Contract):
+    x: float = Field(default=0, ge=-0.05, le=0.05)
+    y: float = Field(default=0, ge=-0.05, le=0.05)
+    zoom: float = Field(default=0, ge=-0.04, le=0.04)
+
+
+class Backdrop(Contract):
+    kind: Literal["flat", "radial"] = "flat"
+    x: float = Field(default=0.5, ge=0, le=1)
+    y: float = Field(default=0.4, ge=0, le=1)
+    color2: str | None = Field(default=None, pattern=HEX)
+    grain: float = Field(default=0, ge=0, le=0.15)
+
+
 class ShotDirection(Contract):
     purpose: str = Field(min_length=8, max_length=240)
     composition: Literal["product", "detail", "type", "graphic", "split"]
@@ -70,8 +108,10 @@ class ShotDirection(Contract):
     background: str = Field(default="#101218", pattern=r"^#[0-9a-fA-F]{6}$")
     bpm: Literal[100, 120, 150, 180] = 120
     beats: int = Field(ge=2, le=24)
-    layers: list[MotionLayer] = Field(min_length=1, max_length=7)
+    layers: list[MotionLayer] = Field(min_length=1, max_length=9)
     hits: list[MotionHit] = Field(default_factory=list, max_length=4)
+    drift: Drift = Field(default_factory=Drift)
+    backdrop: Backdrop = Field(default_factory=Backdrop)
 
     @model_validator(mode="after")
     def within_shot(self):

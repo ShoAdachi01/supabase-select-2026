@@ -467,3 +467,58 @@ def test_claude_motion_defaults_to_opus(monkeypatch):
     providers.reason("Compose", motion=True)
     assert calls[0]["model"] == "claude-opus-5-5"
     assert calls[0]["output_config"] == {"effort": "high"}
+
+
+def test_director_prompt_lists_named_clicks_and_zoom_caps(tmp_path, monkeypatch):
+    for name in ("scene-0.jpg", "scene-1.jpg"):
+        Image.new("RGB", (640, 360), "white").save(tmp_path / name)
+    scenes = sources()
+    for s in scenes:
+        s.update(viewport={"width": 1920, "height": 1080}, source_scale=2, still_scale=2)
+        s["interactions"][0].update(x=960, y=540, label="Board")
+    monkeypatch.setattr(director, "click_crops", lambda folder, scenes: [])
+    prompts = []
+
+    def reasoner(prompt, image, **kwargs):
+        prompts.append(prompt)
+        return film().model_dump()
+
+    director.direct_film("App", "Brief", scenes, tmp_path, strategy="baseline", reasoner=reasoner)
+    assert '"click-0"' in prompts[-1]
+    assert '"zoom_cap": {"footage": 2.0, "product": 2.0}' in prompts[-1]
+
+
+def test_v8_prompt_teaches_vocabulary_and_drops_enforced_prohibitions():
+    from server.video_prompts import MOTION_STUDIES, PROMPT_VERSION
+
+    assert PROMPT_VERSION == "motion-brief-v8"
+    assert "focus" in MOTION_STUDIES and "ring" in MOTION_STUDIES and "depth" in MOTION_STUDIES
+    assert "arbitrary assets, gradients" not in director.RULES
+    assert "Footage layers must remain visible throughout" not in director.RULES
+    assert "VOCABULARY." in director.RULES
+
+
+def test_click_crops_cut_a_native_box_around_each_recorded_click(tmp_path):
+    from server.video_render import ffmpeg
+
+    ffmpeg(
+        "-f", "lavfi", "-i", "color=c=red:s=1920x1080:r=30:d=1",
+        "-f", "lavfi", "-i", "color=c=blue:s=1920x1080:r=30:d=1",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map", "[v]", "-c:v", "libvpx", str(tmp_path / "raw.webm"),
+    )  # fmt: skip
+    scenes = sources()[:1]
+    scenes[0]["end"] = 2
+    scenes[0]["source_scale"] = 1
+    scenes[0]["interactions"] = [
+        dict(kind="click", time=1.5, x=100, y=100, label="Board"),
+        dict(kind="click", time=1.6),
+    ]
+    crops = director.click_crops(tmp_path, scenes)
+    assert crops == [("click-0-0.jpg", "scene-0.jpg / click-0 (Board)")]
+    with Image.open(tmp_path / "click-0-0.jpg") as crop:
+        assert crop.size == (960, 540)
+        r, g, b = crop.convert("RGB").getpixel((10, 10))
+        assert b > 200 and r < 60
+    assert director.click_crops(tmp_path, scenes) == crops
+    assert director.click_crops(tmp_path / "missing", scenes) == []

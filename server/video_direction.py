@@ -13,7 +13,14 @@ from pathlib import Path
 import imageio_ffmpeg
 from PIL import Image, ImageDraw
 
-from server.video_camera import click_point, clicks, effective_scale, resolve_focus, visible_window
+from server.video_camera import (
+    click_point,
+    clicks,
+    effective_scale,
+    resolve_focus,
+    visible_window,
+    zoom_cap,
+)
 from server.video_direction_models import FilmDirection, FilmTreatment, MotionState
 from server.video_models import TimelineClip
 from server.video_prompts import PROMPT_VERSION, TREATMENT, enriched_prompt
@@ -43,14 +50,22 @@ Choose a visual motif grounded in the supplied product. Each shot must prove or 
 Alternate visual density and pacing. Use purposeful cuts, spatial matches, masks, kinetic type, and springs as appropriate; do not force every technique into every film.
 A persistent layer ID represents one object: for entry=match its first geometry MUST exactly equal that ID's last state in the preceding shot. A match cut may swap the captured pixels; do not claim it is a pixel-identical continuous take.
 Use one-container morphing locally where useful, not as a rule for the entire film.
-Render contract: 1920x1080, 30fps, deterministic frame-based motion, one shared BPM (100/120/150/180), local beat coordinates. No CSS, JS, URLs, arbitrary assets, gradients, fabricated UI, or placeholder copy.
+Render contract: 1920x1080, 30fps, deterministic frame-based motion, one shared BPM (100/120/150/180), local beat coordinates. No CSS, JS, URLs, arbitrary assets, fabricated UI, or placeholder copy. Avoid decorative linear gradients.
 Only real captured product pixels may depict the UI. Text INSIDE a product is not a capability OF that product. The user's feature brief supplies product facts and intended audience; you may express those facts even when this capture shows only part of the workflow. Distinguish supplied facts from observed actions. Never pretend an uncaptured interaction was filmed. Do not infer capabilities from sample project names. No invented metrics, outcomes, testimonials, pricing, or brand assets.
-Keep product interactions unobstructed. Footage layers must remain visible throughout, one per shot. Do not overlay headline text on the clicked control. Every supplied feature capture must appear as footage at least once, in capture order; you may interleave or bookend still/details/type shots.
+Keep product interactions unobstructed. One live footage layer per shot; it must stay readable and keep each recorded click in frame. Do not overlay headline text on the clicked control. Every supplied feature capture must appear as footage at least once, in capture order; you may interleave or bookend still/details/type shots.
 Typography: one short thought per shot, at most eight words total. Place type deliberately, with enough width and height; keep it inside the canvas, visible for at least a second. No tiny captions.
 Do not overlay plain text directly on captured pixels. Put it in negative space or over a purpose-designed opaque shape with contrasting ink. Product UI is usually light: white headlines on white screenshots are unreadable. You may use an entire shot for kinetic typography. Do not give every shot a caption.
 Sound: at most a few purposeful whooshes for morphs, ticks for graphic punctuation, thumps for a key landing. Do not synthesize fake UI clicks: those already come from actual recorded events.
 Plan a distinct composition for each purpose; avoid three consecutive shots with the same composition. Do not fill time just to hit the target. Leave breathing room after an action.
 Aim for a motion designer's showreel of THIS product. A row of full-screen captures with labels is an unacceptable final design. Invent a recurring visual device from real details: a control isolated and enlarged, a captured card that expands, typography that occupies negative space, or a colored shape that carries the eye into the next product view. These are ingredients, not a mandatory sequence. Use at least two meaningful geometric state changes across the film. Readable proof holds typically need 3–4 seconds; graphical punctuation can be 1–2 seconds. Do not hold each screen for 8 seconds.
+VOCABULARY. A camera frames part of a footage/product/detail source: cam_x, cam_y (focal point 0-1),
+cam_zoom (1 = whole source, capped per capture). Set focus:"click-N" to frame a recorded click; Cutroom
+fills in its coordinates. Shot drift {x,y,zoom} keeps a hold alive at a constant rate; layer depth 0-1
+scales it for parallax. elevation 0-1 lifts a layer with a soft shadow. backdrop: flat, or radial light
+(x,y,color2), optional grain 0-0.15. Shapes: rect, line (stroke), segments (count, gap) for rails or
+sprockets, ring (stroke) with target_layer + target:"click-N" to circle a real control. Text font:
+sans, display (serif, weight 400) or mono. A static hold is fine while it is being read; it is
+rejected only when it outlasts its reading time.
 """
 
 
@@ -60,7 +75,7 @@ def contact_sheet(folder: Path, items: list[tuple[str, str]], output: str) -> st
     draw = ImageDraw.Draw(canvas)
     for i, (name, label) in enumerate(items):
         if not re.fullmatch(
-            r"(?:(?:scene-\d{1,2}|preview-\d{1,2}-\d+|source-\d{1,2}-(?:start|end))\.jpg|detail-\d{1,2}-\d\.png)",
+            r"(?:(?:scene-\d{1,2}|preview-\d{1,2}-\d+|source-\d{1,2}-(?:start|end)|click-\d{1,2}-\d{1,2})\.jpg|detail-\d{1,2}-\d\.png)",
             name,
         ):
             raise ValueError("Invalid director evidence asset.")
@@ -123,6 +138,88 @@ def source_frames(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
                 stamp.write_text(json.dumps(identity))
             result.append((name, f"RAW {scene['thumbnail']} {label.upper()} (native UI)"))
     return result
+
+
+def click_crops(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
+    """Native-resolution crops around each recorded click, so the director sees real control size."""
+    raw = folder / "raw.webm"
+    if not raw.exists():
+        return []
+    result = []
+    for index, scene in enumerate(scenes[:8]):
+        scale = float(scene.get("source_scale") or 1)
+        width, height = round(960 * scale), round(540 * scale)
+        for n, event in enumerate(clicks(scene)):
+            if "x" not in event or "y" not in event:
+                continue
+            name = f"click-{index}-{n}.jpg"
+            target = folder / name
+            stamp = folder / f"click-{index}-{n}.json"
+            identity = {
+                "time": event["time"],
+                "x": event["x"],
+                "y": event["y"],
+                "scale": scale,
+                "raw_bytes": raw.stat().st_size,
+                "raw_mtime": raw.stat().st_mtime_ns,
+            }
+            if (
+                not target.exists()
+                or not stamp.exists()
+                or json.loads(stamp.read_text()) != identity
+            ):
+                target.unlink(missing_ok=True)
+                cx, cy = event["x"] * scale, event["y"] * scale
+                crop = (
+                    f"crop=w=min({width}\\,iw):h=min({height}\\,ih)"
+                    f":x=min(max({cx:.2f}-out_w/2\\,0)\\,iw-out_w)"
+                    f":y=min(max({cy:.2f}-out_h/2\\,0)\\,ih-out_h)"
+                )
+                completed = subprocess.run(
+                    [
+                        imageio_ffmpeg.get_ffmpeg_exe(),
+                        "-v",
+                        "error",
+                        "-y",
+                        "-ss",
+                        str(float(event["time"])),
+                        "-i",
+                        str(raw),
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        crop,
+                        str(target),
+                    ],
+                    capture_output=True,
+                    timeout=20,
+                )
+                if completed.returncode or not target.exists():
+                    raise ValueError("Could not crop the recorded click frames.")
+                stamp.write_text(json.dumps(identity))
+            result.append((name, f"{scene['thumbnail']} / click-{n} ({event.get('label', '')})"))
+    return result
+
+
+def capture_summary(scene: dict) -> dict:
+    keys = ("thumbnail", "label", "start", "end", "details", "interactions", "viewport", "focus")
+    return {
+        **{k: scene[k] for k in keys if k in scene},
+        "clicks": [
+            {
+                "name": f"click-{n}",
+                "label": e.get("label", ""),
+                "time": e["time"],
+                "x": e.get("x"),
+                "y": e.get("y"),
+            }
+            for n, e in enumerate(clicks(scene))
+        ],
+        "zoom_cap": {
+            "footage": zoom_cap("footage", scene),
+            "product": zoom_cap("product", scene),
+        },
+    }
 
 
 def evidence_scenes(scenes: list[dict]) -> list[dict]:
@@ -534,6 +631,7 @@ def direct_film(
             for i, name in enumerate(source.get("details", [])[:3])
         )
     assets.extend(source_frames(folder, sources))
+    assets.extend(click_crops(folder, sources))
     image = contact_sheet(folder, assets, "director-evidence.jpg")
     schema = json.dumps(FilmDirection.model_json_schema())
     prompt = (
@@ -567,7 +665,7 @@ def direct_film(
             ]
         )
         + "\n"
-        + f"Captures: {json.dumps([{k: s[k] for k in ('thumbnail', 'label', 'start', 'end', 'details', 'interactions', 'viewport', 'focus') if k in s} for s in sources])}\nVisible evidence: {json.dumps(evidence or [])[:12000]}\n"
+        + f"Captures: {json.dumps([capture_summary(s) for s in sources])}\nVisible evidence: {json.dumps(evidence or [])[:12000]}\n"
         "Return the full film as JSON matching this schema. Keep concept to one sentence and grammar to three short sentences. Layer states use normalized x/y/w/h, pixel radius, local beat. "
         "The easing on a destination state controls movement toward that state. Omitted geometry inherits the preceding state. To hold, repeat geometry at a later beat before the next movement. Order layers back-to-front. "
         "Text uses size in pixels. Product is the settled screenshot; footage is the actual interaction. "

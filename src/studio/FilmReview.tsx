@@ -9,10 +9,11 @@ const LABELS: Record<(typeof AXES)[number], string> = {
   continuity: 'Continuity',
   specificity: 'Specificity',
 };
-const STATUS = {
+const STATUS: Record<FilmReviewReport['status'], string> = {
   passed: 'Met the rubric on sampled frames',
   needs_review: 'Below the bar — review before publishing',
   unavailable: 'Visual review unavailable',
+  reviewed: 'Reviewed (legacy check)',
 };
 
 export function FilmReview({ report }: { report: FilmReviewReport }) {

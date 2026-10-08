@@ -69,7 +69,8 @@ export type FilmReviewPass = {
   error?: string;
 };
 export type FilmReviewReport = {
-  status: 'passed' | 'needs_review' | 'unavailable';
+  // 'reviewed' is the pre-rubric status that older stored films still carry.
+  status: 'passed' | 'needs_review' | 'unavailable' | 'reviewed';
   rubric?: string;
   final?: { attempt: number; scores: Record<Axis, number>; review: FilmReviewPass['review'] };
   passes: FilmReviewPass[];

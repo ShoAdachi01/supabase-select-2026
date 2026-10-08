@@ -264,3 +264,20 @@ def test_non_integer_review_passes_does_not_abort_review(tmp_path, monkeypatch):
         film(), sources(), tmp_path, "paper", 30, reasoner=lambda *a, **k: review()
     )
     assert report["status"] == "passed"
+
+
+def test_evidence_failure_makes_the_pass_unavailable_not_an_exception(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+
+    def broken(*a, **k):
+        raise ValueError("Could not inspect the recorded source frames.")
+
+    monkeypatch.setattr(director, "review_evidence", broken)
+    calls = []
+    plan, report = director.review_film(
+        film(), sources(), tmp_path, "paper", 30, reasoner=lambda *a, **k: calls.append(a)
+    )
+    assert calls == []
+    assert report["status"] == "unavailable"
+    assert report["passes"][0]["attempt"] == 0 and "evidence" in report["passes"][0]["error"]
+    assert plan == film()

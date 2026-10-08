@@ -168,7 +168,7 @@ def click_crops(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
         scale = float(scene.get("source_scale") or 1)
         width, height = round(960 * scale), round(540 * scale)
         for n, event in enumerate(clicks(scene)):
-            if "x" not in event or "y" not in event:
+            if event.get("x") is None or event.get("y") is None:
                 continue
             name = f"click-{index}-{n}.jpg"
             target = folder / name
@@ -193,27 +193,33 @@ def click_crops(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
                     f":x=min(max({cx:.2f}-out_w/2\\,0)\\,iw-out_w)"
                     f":y=min(max({cy:.2f}-out_h/2\\,0)\\,ih-out_h)"
                 )
-                completed = subprocess.run(
-                    [
-                        imageio_ffmpeg.get_ffmpeg_exe(),
-                        "-v",
-                        "error",
-                        "-y",
-                        "-ss",
-                        str(float(event["time"])),
-                        "-i",
-                        str(raw),
-                        "-frames:v",
-                        "1",
-                        "-vf",
-                        crop,
-                        str(target),
-                    ],
-                    capture_output=True,
-                    timeout=20,
-                )
+                # Crops are advisory evidence: a click past the recording's end or a
+                # decoder failure drops that crop rather than aborting the take.
+                try:
+                    completed = subprocess.run(
+                        [
+                            imageio_ffmpeg.get_ffmpeg_exe(),
+                            "-v",
+                            "error",
+                            "-y",
+                            "-ss",
+                            str(float(event["time"])),
+                            "-i",
+                            str(raw),
+                            "-frames:v",
+                            "1",
+                            "-vf",
+                            crop,
+                            str(target),
+                        ],
+                        capture_output=True,
+                        timeout=20,
+                    )
+                except (ValueError, subprocess.TimeoutExpired, OSError):
+                    continue
                 if completed.returncode or not target.exists():
-                    raise ValueError("Could not crop the recorded click frames.")
+                    target.unlink(missing_ok=True)
+                    continue
                 stamp.write_text(json.dumps(identity))
             result.append((name, f"{scene['thumbnail']} / click-{n} ({event.get('label', '')})"))
     return result
@@ -980,7 +986,15 @@ def review_film(
             preview=True,
         )
         jobs = json.loads((folder / "motion-jobs.json").read_text())["jobs"]
-        images = review_evidence(folder, plan, jobs, scenes)
+        try:
+            images = review_evidence(folder, plan, jobs, scenes)
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            report["passes"].append(
+                {"attempt": attempt, "error": "Visual review evidence could not be built."}
+            )
+            if candidate is not None:
+                plan = best_plan
+            break
         prompt = (
             CRITIC
             + json.dumps(FilmReview.model_json_schema())

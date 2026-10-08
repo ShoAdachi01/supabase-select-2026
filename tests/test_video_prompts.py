@@ -589,3 +589,27 @@ def test_reasoner_skips_empty_images(monkeypatch, screenshot):
         b["source"]["data"] for b in calls[0]["messages"][0]["content"] if b["type"] == "image"
     ]
     assert images == ([] if screenshot == "" else ["AAA"])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        lambda cmd, **kw: (_ for _ in ()).throw(director.subprocess.TimeoutExpired(cmd, 20)),
+        lambda cmd, **kw: (_ for _ in ()).throw(OSError("no ffmpeg")),
+        lambda cmd, **kw: director.subprocess.CompletedProcess(cmd, 1, b"", b"past the end"),
+    ],
+)
+def test_click_crop_failures_skip_the_crop_instead_of_aborting(tmp_path, monkeypatch, failure):
+    (tmp_path / "raw.webm").write_bytes(b"not a real video")
+    scenes = sources()[:1]
+    scenes[0]["interactions"] = [
+        dict(kind="click", time=9.0, x=100, y=100, label="Late"),
+        dict(kind="click", time=1.0, x=None, y=50),
+        dict(kind="click", time=1.0, x=50, y=None),
+    ]
+    calls = []
+    monkeypatch.setattr(
+        director.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or failure(cmd, **kw)
+    )
+    assert director.click_crops(tmp_path, scenes) == []
+    assert len(calls) == 1  # coordinate-less clicks never reach ffmpeg

@@ -922,6 +922,14 @@ def revision_brief(review: FilmReview) -> str:
     )
 
 
+def review_passes() -> int:
+    """CUTROOM_REVIEW_PASSES as a revision budget of 0-4; anything non-integer means 2."""
+    try:
+        return max(0, min(4, int(setting("CUTROOM_REVIEW_PASSES", "2"))))
+    except ValueError:
+        return 2
+
+
 def review_film(
     plan: FilmDirection,
     scenes: list[dict],
@@ -947,7 +955,7 @@ def review_film(
         creative_context = (
             "\nPreserve the selected treatment: " + (folder / "director-treatment.json").read_text()
         )
-    passes = int(setting("CUTROOM_REVIEW_PASSES", "2"))
+    passes = review_passes()
     report = {
         "status": "unavailable",
         "rubric": "film-rubric-v1",

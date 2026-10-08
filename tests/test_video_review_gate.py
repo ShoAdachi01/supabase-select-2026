@@ -247,3 +247,20 @@ def test_unavailable_review_has_no_final(tmp_path, monkeypatch):
     )
     assert report["status"] == "unavailable"
     assert "final" not in report
+
+
+@pytest.mark.parametrize(
+    "value, expected", [("abc", 2), ("1.5", 2), ("", 2), ("-3", 0), ("0", 0), ("3", 3), ("9", 4)]
+)
+def test_review_passes_setting_is_clamped(monkeypatch, value, expected):
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", value)
+    assert director.review_passes() == expected
+
+
+def test_non_integer_review_passes_does_not_abort_review(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "lots")
+    _, report = director.review_film(
+        film(), sources(), tmp_path, "paper", 30, reasoner=lambda *a, **k: review()
+    )
+    assert report["status"] == "passed"

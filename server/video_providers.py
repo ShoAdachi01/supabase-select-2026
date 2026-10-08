@@ -116,7 +116,8 @@ def reason(
     selected_effort = effort or setting("CUTROOM_MOTION_EFFORT", "high")
     if selected_effort not in ("low", "medium", "high"):
         raise ValueError("Motion effort must be low, medium, or high")
-    images = [screenshot] if isinstance(screenshot, str) else list(screenshot or [])
+    # An empty screenshot means "no image", as it did before multi-image support.
+    images = [s for s in ([screenshot] if isinstance(screenshot, str) else screenshot or []) if s]
     started = time.monotonic()
     if use_claude:
         if not setting("ANTHROPIC_API_KEY"):

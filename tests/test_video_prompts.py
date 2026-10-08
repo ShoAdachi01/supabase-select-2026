@@ -568,3 +568,24 @@ def test_reasoner_openai_sends_every_image_in_order(monkeypatch):
     providers.reason("Review", ["AAA", "BBB"], motion=True)
     images = [b["image_url"] for b in calls[0]["input"][0]["content"] if b["type"] == "input_image"]
     assert images == ["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBB"]
+
+
+@pytest.mark.parametrize("screenshot", ["", ["", "AAA", None, ""]])
+def test_reasoner_skips_empty_images(monkeypatch, screenshot):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kw: (
+            calls.append(kw["json"]),
+            httpx.Response(
+                200, json={"stop_reason": "end_turn", "content": [{"type": "text", "text": "{}"}]}
+            ),
+        )[1],
+    )
+    providers.reason("Review", screenshot)
+    images = [
+        b["source"]["data"] for b in calls[0]["messages"][0]["content"] if b["type"] == "image"
+    ]
+    assert images == ([] if screenshot == "" else ["AAA"])

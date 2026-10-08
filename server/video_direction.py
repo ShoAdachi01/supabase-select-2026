@@ -772,47 +772,85 @@ def direct_film(
     )
 
 
-def type_crops(folder: Path, plan: FilmDirection, jobs: list[dict]) -> str | None:
-    """Crop each text layer's settled rectangle 1:1 from the shot's last preview frame."""
-    crops: list[Image.Image] = []
-    for job in jobs:
-        if job["index"] >= len(plan.shots):
-            continue
-        with Image.open(folder / f"preview-{job['index']}-{job['frames'] - 1}.jpg") as frame:
-            frame = frame.convert("RGB")
-            width, height = frame.size
-            for layer in plan.shots[job["index"]].layers:
-                if layer.kind != "text" or not layer.states:
-                    continue
-                last = layer.states[-1]
-                left = max(0, int(last.x * width) - 24)
-                top = max(0, int(last.y * height) - 24)
-                right = min(width, math.ceil((last.x + last.w) * width) + 24)
-                bottom = min(height, math.ceil((last.y + last.h) * height) + 24)
-                if right > left and bottom > top:
-                    crops.append(frame.crop((left, top, right, bottom)))
-    if not crops:
-        return None
-    rows = [crops[i : i + 2] for i in range(0, len(crops), 2)]
-    column_w = max(c.width for c in crops)
-    canvas = Image.new(
-        "RGB", (max(960, 2 * column_w), sum(max(c.height for c in r) for r in rows)), "#eeeeee"
-    )
-    y = 0
-    for row in rows:
-        for col, crop in enumerate(row):
-            canvas.paste(crop, (col * column_w, y))
-        y += max(c.height for c in row)
-    canvas.save(folder / "review-type.jpg", quality=88)
+MAX_EDGE = 1568
+MAX_EVIDENCE_IMAGES = 60
+
+
+def encode_sheet(canvas: Image.Image, folder: Path, name: str) -> str:
+    canvas.save(folder / name, quality=88)
     buffer = io.BytesIO()
     canvas.save(buffer, "JPEG", quality=85)
     return base64.b64encode(buffer.getvalue()).decode()
 
 
+def type_crops(folder: Path, plan: FilmDirection, jobs: list[dict]) -> list[str]:
+    """Crop each text layer's settled rectangle 1:1 from the shot's last preview frame.
+
+    Crops are shelf-packed into sheets of at most MAX_EDGE on each side; only a crop
+    larger than a sheet is scaled down.
+    """
+    crops: list[Image.Image] = []
+    for job in jobs:
+        if job["index"] >= len(plan.shots):
+            continue
+        with Image.open(folder / f"preview-{job['index']}-{job['frames'] - 1}.jpg") as opened:
+            frame = opened.convert("RGB")
+        width, height = frame.size
+        for layer in plan.shots[job["index"]].layers:
+            if layer.kind != "text" or not layer.states:
+                continue
+            last = layer.states[-1]
+            left = max(0, int(last.x * width) - 24)
+            top = max(0, int(last.y * height) - 24)
+            right = min(width, math.ceil((last.x + last.w) * width) + 24)
+            bottom = min(height, math.ceil((last.y + last.h) * height) + 24)
+            if right > left and bottom > top:
+                crop = frame.crop((left, top, right, bottom))
+                if crop.width > MAX_EDGE or crop.height > MAX_EDGE:
+                    crop.thumbnail((MAX_EDGE, MAX_EDGE))
+                crops.append(crop)
+    sheets: list[list[tuple[int, int, Image.Image]]] = []
+    x = y = row_h = 0
+    for crop in crops:
+        if not sheets:
+            sheets.append([])
+        if x + crop.width > MAX_EDGE:
+            x, y, row_h = 0, y + row_h, 0
+        if y + crop.height > MAX_EDGE:
+            sheets.append([])
+            x = y = row_h = 0
+        sheets[-1].append((x, y, crop))
+        x += crop.width
+        row_h = max(row_h, crop.height)
+    images = []
+    for k, placed in enumerate(sheets):
+        canvas = Image.new(
+            "RGB",
+            (max(c.width + px for px, _, c in placed), max(c.height + py for _, py, c in placed)),
+            "#eeeeee",
+        )
+        for px, py, crop in placed:
+            canvas.paste(crop, (px, py))
+        images.append(encode_sheet(canvas, folder, f"review-type-{k}.jpg"))
+    return images
+
+
+def chunked_sheets(
+    folder: Path, items: list[tuple[str, str]], stem: str, size: int, **sheet
+) -> list[str]:
+    return [
+        contact_sheet(folder, items[i : i + size], f"{stem}-{k}.jpg", **sheet)
+        for k, i in enumerate(range(0, len(items), size))
+    ]
+
+
 def review_evidence(
     folder: Path, plan: FilmDirection, jobs: list[dict], scenes: list[dict]
 ) -> list[str]:
-    """Per-shot half-second sheets, settled type crops, click crops and RAW source frames."""
+    """Per-shot half-second sheets, settled type crops, click crops and RAW source frames.
+
+    Every image stays within MAX_EDGE on its long edge, and at most 60 are returned.
+    """
     images, offset = [], 0.0
     for job in jobs:
         items = [
@@ -822,20 +860,15 @@ def review_evidence(
             )
             for frame in preview_frame_list(job["frames"])
         ]
-        images.append(
-            contact_sheet(
-                folder, items, f"review-shot-{job['index']}.jpg", tile=(960, 540), columns=2
-            )
+        images += chunked_sheets(
+            folder, items, f"review-shot-{job['index']}", 4, tile=(784, 441), columns=2
         )
         offset += job["frames"] / 30
-    if type_sheet := type_crops(folder, plan, jobs):
-        images.append(type_sheet)
+    images += type_crops(folder, plan, jobs)
     used = evidence_scenes(scenes)
-    if clicks := click_crops(folder, used):
-        images.append(contact_sheet(folder, clicks, "review-clicks.jpg"))
-    if sources := source_frames(folder, used):
-        images.append(contact_sheet(folder, sources, "review-sources.jpg"))
-    return images
+    images += chunked_sheets(folder, click_crops(folder, used), "review-clicks", 12)
+    images += chunked_sheets(folder, source_frames(folder, used), "review-sources", 12)
+    return images[:MAX_EVIDENCE_IMAGES]
 
 
 def review_film(

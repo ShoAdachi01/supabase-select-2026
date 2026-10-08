@@ -201,7 +201,7 @@ def test_review_uses_rendered_frames_and_is_bounded(tmp_path, monkeypatch):
     assert (
         report["status"] == "needs_review"
     )  # Never claim that self-evaluation guarantees quality.
-    assert (tmp_path / "review-shot-0.jpg").exists()
+    assert (tmp_path / "review-shot-0-0.jpg").exists()
 
 
 def test_evidence_paths_do_not_escape_private_job(tmp_path):
@@ -493,5 +493,25 @@ def test_review_evidence_samples_every_half_second_and_crops_settled_type(tmp_pa
             )
     images = director.review_evidence(tmp_path, plan, jobs, sources())
     assert len(images) >= 3
-    assert (tmp_path / "review-shot-0.jpg").exists()
-    assert Image.open(tmp_path / "review-type.jpg").width >= 960
+    assert (tmp_path / "review-shot-0-0.jpg").exists()
+    with Image.open(tmp_path / "review-type-0.jpg") as sheet:
+        assert max(sheet.size) <= 1568
+
+
+def test_review_sheets_stay_within_critic_image_size(tmp_path):
+    plan = film()
+    layer = plan.shots[0].layers[0].model_copy(update={"id": "wide", "kind": "text", "text": "x"})
+    layer.states[-1] = layer.states[-1].model_copy(update={"x": 0, "y": 0.1, "w": 1, "h": 0.3})
+    plan.shots[0].layers.append(layer)
+    jobs = [{"index": 0, "frames": 450}]
+    for f in director.preview_frame_list(450):
+        Image.new("RGB", (1920, 1080), "white").save(tmp_path / f"preview-0-{f}.jpg")
+    images = director.review_evidence(tmp_path, plan, jobs, sources())
+    assert 0 < len(images) <= 60
+    sheets = sorted(tmp_path.glob("review-shot-0-*.jpg"))
+    assert len(sheets) == 8  # 31 frames, four per sheet
+    for path in [*sheets, *tmp_path.glob("review-type-*.jpg")]:
+        with Image.open(path) as sheet:
+            assert max(sheet.size) <= 1568
+    with Image.open(tmp_path / "review-type-0.jpg") as sheet:
+        assert sheet.width == 1568

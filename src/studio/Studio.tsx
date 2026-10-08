@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { accessToken, api, initialize } from '../api';
 import type { Features, Playback, TimelineClip, Video, Voice } from './types';
+import { FilmReview } from './FilmReview';
 import TimelineEditor, { initialClips, newTitle } from './TimelineEditor';
 
 const DEMO_BRIEF =
@@ -1080,6 +1081,9 @@ export default function Studio() {
                     </div>
                   )}
                 </div>
+                {job.payload.direction?.review && (
+                  <FilmReview report={job.payload.direction.review} />
+                )}
                 <div className="player-meta">
                   <span>
                     <span

@@ -613,3 +613,20 @@ def test_click_crop_failures_skip_the_crop_instead_of_aborting(tmp_path, monkeyp
     )
     assert director.click_crops(tmp_path, scenes) == []
     assert len(calls) == 1  # coordinate-less clicks never reach ffmpeg
+
+
+def test_click_crops_are_capped_per_scene(tmp_path):
+    from server.video_render import ffmpeg
+
+    ffmpeg(
+        "-f", "lavfi", "-i", "color=c=blue:s=1920x1080:r=30:d=2",
+        "-c:v", "libvpx", str(tmp_path / "raw.webm"),
+    )  # fmt: skip
+    scenes = sources()[:1]
+    scenes[0]["end"] = 2
+    scenes[0]["source_scale"] = 1
+    scenes[0]["interactions"] = [
+        dict(kind="click", time=0.2 * n, x=100 + n, y=100, label=f"c{n}") for n in range(6)
+    ]
+    crops = director.click_crops(tmp_path, scenes)
+    assert [name for name, _ in crops] == [f"click-0-{n}.jpg" for n in range(4)]

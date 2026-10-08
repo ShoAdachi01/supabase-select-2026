@@ -164,7 +164,7 @@ def test_director_repairs_invalid_plan_and_receives_screens(tmp_path, monkeypatc
         "Product", "Show both features", sources(), tmp_path, strategy="baseline"
     )
     assert result == film()
-    assert calls[0][1].startswith("/9j/")
+    assert isinstance(calls[0][1], list) and calls[0][1][0].startswith("/9j/")
     assert "unknown capture" in calls[1][0]
     assert (tmp_path / "beat-grid.json").exists()
     assert json.loads((tmp_path / "beat-grid.json").read_text())[1]["start_frame"] == 90
@@ -597,3 +597,46 @@ def test_type_crop_follows_the_drifted_text(tmp_path):
     with Image.open(tmp_path / "review-type-0.jpg") as sheet:
         r, g, b = sheet.convert("RGB").getpixel((sheet.width // 2, sheet.height // 2))
     assert r > 180 and g < 80
+
+
+def test_director_evidence_is_chunked_within_the_critic_image_size(tmp_path, monkeypatch):
+    scenes = []
+    for i in range(8):
+        Image.new("RGB", (3840, 2160), "white").save(tmp_path / f"scene-{i}.jpg")
+        details = []
+        for d in range(3):
+            Image.new("RGB", (1200, 800), "gray").save(tmp_path / f"detail-{i}-{d}.png")
+            details.append(f"detail-{i}-{d}.png")
+        scenes.append(
+            dict(
+                thumbnail=f"scene-{i}.jpg",
+                start=i * 3,
+                end=i * 3 + 3,
+                label=f"Feature {i}",
+                details=details,
+                interactions=[],
+            )
+        )
+    crops = []
+    for i in range(8):
+        for n in range(4):
+            Image.new("RGB", (1920, 1080), "red").save(tmp_path / f"click-{i}-{n}.jpg")
+            crops.append((f"click-{i}-{n}.jpg", f"click {i}/{n}"))
+    monkeypatch.setattr(director, "click_crops", lambda folder, scenes: crops)
+    seen = []
+
+    def reasoner(prompt, images, **kwargs):
+        seen.append(images)
+        raise director.ProviderError("stop after the first call")
+
+    with pytest.raises(director.ProviderError):
+        director.direct_film(
+            "App", "Brief", scenes, tmp_path, strategy="storyboard", reasoner=reasoner
+        )
+    (images,) = seen  # the treatment call receives the same chunked evidence
+    assert isinstance(images, list) and len(images) >= 4
+    sheets = sorted(tmp_path.glob("director-evidence-*.jpg"))
+    assert len(sheets) == len(images)
+    for path in sheets:
+        with Image.open(path) as sheet:
+            assert max(sheet.size) <= 1568

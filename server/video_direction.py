@@ -110,6 +110,15 @@ def contact_sheet(
     return base64.b64encode(buffer.getvalue()).decode()
 
 
+def chunked_sheets(
+    folder: Path, items: list[tuple[str, str]], stem: str, size: int, **sheet
+) -> list[str]:
+    return [
+        contact_sheet(folder, items[i : i + size], f"{stem}-{k}.jpg", **sheet)
+        for k, i in enumerate(range(0, len(items), size))
+    ]
+
+
 def source_frames(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
     """Show native UI changes so the director/critic doesn't mistake them for camera motion."""
     raw = folder / "raw.webm"
@@ -159,6 +168,9 @@ def source_frames(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
     return result
 
 
+MAX_CLICK_CROPS = 4
+
+
 def click_crops(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
     """Native-resolution crops around each recorded click, so the director sees real control size."""
     raw = folder / "raw.webm"
@@ -168,7 +180,7 @@ def click_crops(folder: Path, scenes: list[dict]) -> list[tuple[str, str]]:
     for index, scene in enumerate(scenes[:8]):
         scale = float(scene.get("source_scale") or 1)
         width, height = round(960 * scale), round(540 * scale)
-        for n, event in enumerate(clicks(scene)):
+        for n, event in enumerate(clicks(scene)[:MAX_CLICK_CROPS]):
             if event.get("x") is None or event.get("y") is None:
                 continue
             name = f"click-{index}-{n}.jpg"
@@ -686,7 +698,8 @@ def direct_film(
         )
     assets.extend(source_frames(folder, sources))
     assets.extend(click_crops(folder, sources))
-    image = contact_sheet(folder, assets, "director-evidence.jpg")
+    # 15 tiles of 480x300 make a 1440x1500 sheet: within the size the model actually sees.
+    images = chunked_sheets(folder, assets, "director-evidence", 15)
     schema = json.dumps(FilmDirection.model_json_schema())
     prompt = (
         RULES + f"\nProduct: {title}\nBrief: {brief}\nArt direction: {creative_direction}\n"
@@ -739,7 +752,7 @@ def direct_film(
         for _attempt in range(0 if treatment is not None else 2):
             proposed = reasoner(
                 treatment_prompt + "\nValidation feedback: " + json.dumps(treatment_errors),
-                image,
+                images,
                 max_tokens=4000,
                 motion=True,
             )
@@ -778,7 +791,7 @@ def direct_film(
             (folder / f"director-prompt-{attempt}.txt").write_text(request_prompt)
             proposed = reasoner(
                 request_prompt,
-                image,
+                images,
                 max_tokens=10000,
                 motion=True,
                 effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
@@ -878,15 +891,6 @@ def type_crops(folder: Path, plan: FilmDirection, jobs: list[dict]) -> list[str]
             canvas.paste(crop, (px, py))
         images.append(encode_sheet(canvas, folder, f"review-type-{k}.jpg"))
     return images
-
-
-def chunked_sheets(
-    folder: Path, items: list[tuple[str, str]], stem: str, size: int, **sheet
-) -> list[str]:
-    return [
-        contact_sheet(folder, items[i : i + size], f"{stem}-{k}.jpg", **sheet)
-        for k, i in enumerate(range(0, len(items), size))
-    ]
 
 
 def review_evidence(

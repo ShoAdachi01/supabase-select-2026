@@ -22,7 +22,13 @@ from server.video_camera import (
     zoom_cap,
 )
 from server.video_composition import preview_frame_list
-from server.video_direction_models import FilmDirection, FilmTreatment, MotionState
+from server.video_direction_models import (
+    AXES,
+    FilmDirection,
+    FilmReview,
+    FilmTreatment,
+    MotionState,
+)
 from server.video_models import TimelineClip
 from server.video_prompts import PROMPT_VERSION, TREATMENT, enriched_prompt
 from server.video_providers import ProviderError, reason, setting
@@ -871,6 +877,47 @@ def review_evidence(
     return images[:MAX_EVIDENCE_IMAGES]
 
 
+def gate(review: FilmReview) -> str:
+    return (
+        "passed" if min(review.scores().values()) >= 8 and not review.blocking else "needs_review"
+    )
+
+
+def regressed(before: FilmReview, after: FilmReview) -> list[str]:
+    return [a for a in AXES if before.scores()[a] - after.scores()[a] >= 2]
+
+
+CRITIC = """Score these actual rendered frames of a product launch film on seven axes, 1-10.
+Anchors (5 = acceptable draft, 8 = launch-ready):
+- readability: 5 = key UI legible only on pause; 8 = the clicked control and its result read at 1080p.
+- canvas: 5 = large unused areas or thin bands; 8 = the dominant object fills its frame by intent.
+- motion: 5 = moves happen but do not lead the eye; 8 = every move guides attention to a real detail.
+- pacing: 5 = holds outlast their reading; 8 = contrast of density and speed, ending lands.
+- typography: 5 = readable but timid or awkward breaks; 8 = clear hierarchy, no orphans or clipping.
+- continuity: 5 = cuts register as jumps; 8 = matches and scale changes feel intentional.
+- specificity: 5 = could be any SaaS; 8 = concept and copy belong to this product only.
+For EVERY axis give 1-4 observations (shot, time, what is visible). Observations may be positive.
+For any axis below 8 give actionable findings (problem plus the intended change).
+List blocking defects separately: clipped_text (settled text cropped), hidden_click (recorded
+action outside the frame or covered), unreadable_type (added text illegible). Do not invent
+criticism of strong work; a score of 8-10 needs observations, not defects.
+Focus on OUR composition, not the customer's UI styling. RAW frames show native UI changes.
+Images: per-shot sheets, settled type crops, click crops, RAW source frames.
+Return JSON matching this schema: """
+
+
+def revision_brief(review: FilmReview) -> str:
+    """Lead with the weakest axes and blocking defects so the revision targets them first."""
+    scores = review.scores()
+    weakest = sorted(AXES, key=lambda a: scores[a])
+    findings = [f.model_dump() for a in weakest for f in getattr(review, a).findings]
+    return (
+        f"Axes, lowest first: {json.dumps({a: scores[a] for a in weakest})}\n"
+        f"Blocking defects: {json.dumps([f.model_dump() for f in review.blocking])}\n"
+        f"Findings: {json.dumps(findings)}"
+    )
+
+
 def review_film(
     plan: FilmDirection,
     scenes: list[dict],
@@ -882,10 +929,10 @@ def review_film(
     reasoner=None,
     geometry_effort: str | None = None,
 ) -> tuple[FilmDirection, dict]:
-    """Inspect rendered state sequences, with at most two targeted revision attempts.
+    """Score rendered frames on a seven-axis rubric, with a bounded number of revisions.
 
-    A self-assigned numeric grade is deliberately not used as a quality guarantee.
-    The report records unresolved findings and review availability honestly.
+    A revision is kept only if it passes the evidence validator and its re-score drops no
+    axis by two or more. The report summarizes sampled visual evidence, not certified quality.
     """
     from server.video_composition import prepare_compositions
     from server.video_timeline import compile_timeline
@@ -896,8 +943,15 @@ def review_film(
         creative_context = (
             "\nPreserve the selected treatment: " + (folder / "director-treatment.json").read_text()
         )
-    report = {"status": "needs_review", "passes": [], "revision_count": 0}
-    for attempt in range(3):
+    passes = int(setting("CUTROOM_REVIEW_PASSES", "2"))
+    report = {
+        "status": "unavailable",
+        "rubric": "film-rubric-v1",
+        "passes": [],
+        "revision_count": 0,
+    }
+    best_plan, best_review, candidate = plan, None, None
+    for attempt in range(passes + 1):
         if checkpoint:
             checkpoint()
         clips = compile_direction(plan, scenes)
@@ -916,44 +970,34 @@ def review_film(
         jobs = json.loads((folder / "motion-jobs.json").read_text())["jobs"]
         images = review_evidence(folder, plan, jobs, scenes)
         prompt = (
-            "Critique these actual rendered frames in chronological order, including shot boundaries. "
-            'Return JSON {"findings":[{"shot":0,"time":0.5,"problem":"specific visible defect"}]}. '
-            "Focus on OUR composited text, graphics and camera choices, NOT the customer's original UI styling. "
-            "Never ask to recolor product pixels or enlarge every native UI label. Inspect added text especially: white on white is a defect. "
-            "RAW START/END frames show changes inside the original recording. Native navigation or a full-screen preview is not a compositor camera error; never request restoring UI that is absent from the source frame. Revise added geometry/copy or choose an available still, while retaining the recorded action. "
-            "Typing and masks intentionally reveal partial words during entrances. Report clipping only if settled text remains cropped; a brief graphic anticipation is not automatically an empty hold. "
-            "Live footage includes the cursor action before the destination appears; do not call a short action lead-in a duplicated shot. "
-            "Check clipping, type readability and contrast, obscured interactions, repeated compositions, "
-            "awkward spatial jumps, empty pauses, and whether real product evidence is clear. "
-            "Also assess art direction against the supplied concept: flag tiny full-app insets, redundant copies of the same screen, graphic shots that finish moving early then hold without a readable reason, or typography too timid to establish hierarchy. "
-            "Describe concrete visible evidence for each design weakness and the intended improvement, not generic requests to make it more premium. "
-            "Do not give numeric quality scores, invent defects, or request new product assets. "
-            "An empty findings list means you found no defects in these sampled frames, not a guarantee about audio or every frame. "
-            f"Film plan: {plan.model_dump_json()}"
+            CRITIC
+            + json.dumps(FilmReview.model_json_schema())
+            + f"\nFilm plan: {plan.model_dump_json()}"
         )
         try:
-            result = reasoner(prompt + creative_context, images, max_tokens=1600, motion=True)
-            findings = result.get("findings")
-            if not isinstance(findings, list) or any(
-                not isinstance(f, dict) or not isinstance(f.get("problem"), str) for f in findings
-            ):
-                raise ValueError("Invalid visual review response.")
-        except (ValueError, TypeError):
-            report["status"] = "unavailable"
-            report["passes"].append(
-                {
-                    "attempt": attempt,
-                    "findings": [],
-                    "error": "Visual review did not return a usable report.",
-                }
+            review = FilmReview.model_validate(
+                reasoner(prompt + creative_context, images, max_tokens=4000, motion=True)
             )
+        except (ValueError, TypeError):
+            report["passes"].append(
+                {"attempt": attempt, "error": "Visual review did not return a usable report."}
+            )
+            if candidate is not None:
+                plan = best_plan
             break
-        report["passes"].append({"attempt": attempt, "findings": findings[:12]})
+        entry = {"attempt": attempt, "scores": review.scores(), "review": review.model_dump()}
+        report["passes"].append(entry)
         (folder / f"director-plan-{attempt}.json").write_text(plan.model_dump_json(indent=2))
-        if not findings:
-            report["status"] = "reviewed"
-            break
-        if attempt == 2:
+        drops = regressed(best_review, review) if candidate is not None else []
+        if drops:
+            entry["rejected_revision"] = [f"Regressed {axis}" for axis in drops]
+            plan = best_plan
+        else:
+            if candidate is not None:
+                report["revision_count"] += 1
+            best_plan, best_review = plan, review
+        candidate = None
+        if gate(best_review) == "passed" or attempt == passes:
             break
         if checkpoint:
             checkpoint()
@@ -962,9 +1006,11 @@ def review_film(
                 reasoner(
                     enriched_prompt(RULES, "detailed")
                     + creative_context
-                    + "\nRepair the specific rendered defects below. Keep the concept and unaffected shots. "
+                    + "\nRevise the film to raise the lowest rubric axes and clear every blocking defect. "
+                    "Keep the concept and unaffected shots. "
                     "Return the complete revised film, using exactly the same JSON schema and only existing assets.\n"
-                    f"Maximum duration: {target}s. Prior revision rejections: {json.dumps([p.get('rejected_revision') for p in report['passes']])}\nFindings: {json.dumps(findings[:12])}\nExisting film: {plan.model_dump_json()}\nSchema: {json.dumps(FilmDirection.model_json_schema())}",
+                    f"Maximum duration: {target}s. Prior revision rejections: {json.dumps([p.get('rejected_revision') for p in report['passes']])}\n"
+                    f"{revision_brief(best_review)}\nExisting film: {best_plan.model_dump_json()}\nSchema: {json.dumps(FilmDirection.model_json_schema())}",
                     images,
                     max_tokens=10000,
                     motion=True,
@@ -974,15 +1020,16 @@ def review_film(
             revised = constrain_geometry(revised, scenes)
             issues = validate_evidence(revised, scenes, target)
             if issues:
-                report["passes"][-1]["rejected_revision"] = issues
+                entry["rejected_revision"] = issues
                 continue
-            plan = revised
-            report["revision_count"] += 1
+            plan = candidate = revised
         except ProviderError as exc:
-            report["passes"][-1]["rejected_revision"] = [str(exc)]
+            entry["rejected_revision"] = [str(exc)]
             break
         except (ValueError, TypeError) as exc:
-            report["passes"][-1]["rejected_revision"] = [str(exc)[:2000]]
-    save_direction(folder, plan)
+            entry["rejected_revision"] = [str(exc)[:2000]]
+    if best_review is not None:
+        report["status"] = gate(best_review)
+    save_direction(folder, best_plan)
     (folder / "director-review.json").write_text(json.dumps(report, indent=2))
-    return plan, report
+    return best_plan, report

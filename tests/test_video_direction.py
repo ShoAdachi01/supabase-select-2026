@@ -185,15 +185,20 @@ def test_review_uses_rendered_frames_and_is_bounded(tmp_path, monkeypatch):
                 )
 
     monkeypatch.setattr(video_composition, "prepare_compositions", preview)
-    answers = iter(
-        [
-            {"findings": [{"shot": 0, "time": 1, "problem": "Title needs room"}]},
-            film().model_dump(),
-            {"findings": [{"shot": 0, "time": 1, "problem": "Title needs room"}]},
-            film().model_dump(),
-            {"findings": [{"shot": 0, "time": 1, "problem": "Title needs room"}]},
-        ]
-    )
+    from server.video_direction_models import AXES
+
+    def axis(score):
+        return {
+            "score": score,
+            "observations": [{"shot": 0, "time": 1, "note": "The title sits on the product."}],
+            "findings": []
+            if score >= 8
+            else [{"shot": 0, "time": 1, "problem": "Title needs room", "change": "Move it up."}],
+        }
+
+    failing = {a: axis(6 if a == "canvas" else 9) for a in AXES} | {"blocking": []}
+    answers = iter([failing, film().model_dump(), failing, film().model_dump(), failing])
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
     monkeypatch.setattr(director, "reason", lambda *args, **kwargs: next(answers))
     _, report = director.review_film(film(), sources(), tmp_path, "paper", 30)
     assert len(calls) == 3

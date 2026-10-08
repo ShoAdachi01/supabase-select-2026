@@ -162,3 +162,46 @@ class FilmTreatment(Contract):
         if self.chosen_concept not in {c.name for c in self.concepts}:
             raise ValueError("Choose one of the three proposed concepts")
         return self
+
+
+AXES = ("readability", "canvas", "motion", "pacing", "typography", "continuity", "specificity")
+
+
+class Observation(Contract):
+    shot: int = Field(ge=0, le=20)
+    time: float = Field(ge=0, le=120)
+    note: str = Field(min_length=8, max_length=400)
+
+
+class ReviewFinding(Contract):
+    shot: int = Field(ge=0, le=20)
+    time: float = Field(ge=0, le=120)
+    problem: str = Field(min_length=8, max_length=600)
+    change: str = Field(min_length=8, max_length=400)
+    blocking: Literal["clipped_text", "hidden_click", "unreadable_type"] | None = None
+
+
+class AxisScore(Contract):
+    score: int = Field(ge=1, le=10)
+    observations: list[Observation] = Field(min_length=1, max_length=4)
+    findings: list[ReviewFinding] = Field(default_factory=list, max_length=4)
+
+    @model_validator(mode="after")
+    def failing_needs_action(self):
+        if self.score < 8 and not self.findings:
+            raise ValueError("An axis below 8 needs an actionable finding.")
+        return self
+
+
+class FilmReview(Contract):
+    readability: AxisScore
+    canvas: AxisScore
+    motion: AxisScore
+    pacing: AxisScore
+    typography: AxisScore
+    continuity: AxisScore
+    specificity: AxisScore
+    blocking: list[ReviewFinding] = Field(default_factory=list, max_length=6)
+
+    def scores(self) -> dict[str, int]:
+        return {axis: getattr(self, axis).score for axis in AXES}

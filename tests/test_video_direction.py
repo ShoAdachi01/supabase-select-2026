@@ -179,7 +179,7 @@ def test_review_uses_rendered_frames_and_is_bounded(tmp_path, monkeypatch):
         jobs = [{"index": i, "frames": 90} for i in range(2)]
         (folder / "motion-jobs.json").write_text(json.dumps({"jobs": jobs}))
         for job in jobs:
-            for frame in (0, 18, 45, 71, 89):
+            for frame in director.preview_frame_list(90):
                 Image.new("RGB", (960, 540), "blue").save(
                     folder / f"preview-{job['index']}-{frame}.jpg"
                 )
@@ -201,7 +201,7 @@ def test_review_uses_rendered_frames_and_is_bounded(tmp_path, monkeypatch):
     assert (
         report["status"] == "needs_review"
     )  # Never claim that self-evaluation guarantees quality.
-    assert (tmp_path / "director-review-2.jpg").exists()
+    assert (tmp_path / "review-shot-0.jpg").exists()
 
 
 def test_evidence_paths_do_not_escape_private_job(tmp_path):
@@ -475,3 +475,23 @@ def test_director_rejects_model_supplied_target_coordinates(tmp_path, monkeypatc
     )
     assert result == film()
     assert "target_x/target_y are set by Cutroom; use target" in calls[1][0]
+
+
+def test_review_evidence_samples_every_half_second_and_crops_settled_type(tmp_path):
+    assert director.preview_frame_list(61) == [0, 15, 30, 45, 60]
+    plan = film()
+    plan.shots[0].layers.append(
+        plan.shots[0]
+        .layers[0]
+        .model_copy(update={"id": "t", "kind": "text", "text": "Still yours"})
+    )
+    jobs = [{"index": 0, "frames": 61}, {"index": 1, "frames": 61}]
+    for job in jobs:
+        for f in director.preview_frame_list(job["frames"]):
+            Image.new("RGB", (1920, 1080), "white").save(
+                tmp_path / f"preview-{job['index']}-{f}.jpg"
+            )
+    images = director.review_evidence(tmp_path, plan, jobs, sources())
+    assert len(images) >= 3
+    assert (tmp_path / "review-shot-0.jpg").exists()
+    assert Image.open(tmp_path / "review-type.jpg").width >= 960

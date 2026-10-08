@@ -21,6 +21,7 @@ from server.video_camera import (
     visible_window,
     zoom_cap,
 )
+from server.video_composition import preview_frame_list
 from server.video_direction_models import FilmDirection, FilmTreatment, MotionState
 from server.video_models import TimelineClip
 from server.video_prompts import PROMPT_VERSION, TREATMENT, enriched_prompt
@@ -69,21 +70,31 @@ rejected only when it outlasts its reading time.
 """
 
 
-def contact_sheet(folder: Path, items: list[tuple[str, str]], output: str) -> str:
+def contact_sheet(
+    folder: Path,
+    items: list[tuple[str, str]],
+    output: str,
+    *,
+    tile: tuple[int, int] = (480, 270),
+    columns: int = 3,
+) -> str:
     """Local allowlisted assets only; labels survive into the vision evidence."""
-    canvas = Image.new("RGB", (1440, math.ceil(len(items) / 3) * 300), "#eeeeee")
+    cell_w, cell_h = tile[0], tile[1] + 30
+    canvas = Image.new(
+        "RGB", (columns * cell_w, math.ceil(len(items) / columns) * cell_h), "#eeeeee"
+    )
     draw = ImageDraw.Draw(canvas)
     for i, (name, label) in enumerate(items):
         if not re.fullmatch(
-            r"(?:(?:scene-\d{1,2}|preview-\d{1,2}-\d+|source-\d{1,2}-(?:start|end)|click-\d{1,2}-\d{1,2})\.jpg|detail-\d{1,2}-\d\.png)",
+            r"(?:(?:scene-\d{1,2}|preview-\d{1,2}-\d+|source-\d{1,2}-(?:start|end)|click-\d{1,2}-\d{1,2})\.jpg|detail-\d{1,2}-\d\.png|review-[\w-]+\.jpg)",
             name,
         ):
             raise ValueError("Invalid director evidence asset.")
         with Image.open(folder / name) as source:
-            tile = source.convert("RGB")
-            tile.thumbnail((480, 270))
-        x, y = i % 3 * 480, i // 3 * 300
-        canvas.paste(tile, (x, y + 30))
+            image = source.convert("RGB")
+            image.thumbnail(tile)
+        x, y = i % columns * cell_w, i // columns * cell_h
+        canvas.paste(image, (x, y + 30))
         draw.text((x + 8, y + 8), label[:75], fill="black")
     canvas.save(folder / output, quality=88)
     buffer = io.BytesIO()
@@ -761,6 +772,72 @@ def direct_film(
     )
 
 
+def type_crops(folder: Path, plan: FilmDirection, jobs: list[dict]) -> str | None:
+    """Crop each text layer's settled rectangle 1:1 from the shot's last preview frame."""
+    crops: list[Image.Image] = []
+    for job in jobs:
+        if job["index"] >= len(plan.shots):
+            continue
+        with Image.open(folder / f"preview-{job['index']}-{job['frames'] - 1}.jpg") as frame:
+            frame = frame.convert("RGB")
+            width, height = frame.size
+            for layer in plan.shots[job["index"]].layers:
+                if layer.kind != "text" or not layer.states:
+                    continue
+                last = layer.states[-1]
+                left = max(0, int(last.x * width) - 24)
+                top = max(0, int(last.y * height) - 24)
+                right = min(width, math.ceil((last.x + last.w) * width) + 24)
+                bottom = min(height, math.ceil((last.y + last.h) * height) + 24)
+                if right > left and bottom > top:
+                    crops.append(frame.crop((left, top, right, bottom)))
+    if not crops:
+        return None
+    rows = [crops[i : i + 2] for i in range(0, len(crops), 2)]
+    column_w = max(c.width for c in crops)
+    canvas = Image.new(
+        "RGB", (max(960, 2 * column_w), sum(max(c.height for c in r) for r in rows)), "#eeeeee"
+    )
+    y = 0
+    for row in rows:
+        for col, crop in enumerate(row):
+            canvas.paste(crop, (col * column_w, y))
+        y += max(c.height for c in row)
+    canvas.save(folder / "review-type.jpg", quality=88)
+    buffer = io.BytesIO()
+    canvas.save(buffer, "JPEG", quality=85)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def review_evidence(
+    folder: Path, plan: FilmDirection, jobs: list[dict], scenes: list[dict]
+) -> list[str]:
+    """Per-shot half-second sheets, settled type crops, click crops and RAW source frames."""
+    images, offset = [], 0.0
+    for job in jobs:
+        items = [
+            (
+                f"preview-{job['index']}-{frame}.jpg",
+                f"Shot {job['index']} / {offset + frame / 30:.2f}s / frame {frame}",
+            )
+            for frame in preview_frame_list(job["frames"])
+        ]
+        images.append(
+            contact_sheet(
+                folder, items, f"review-shot-{job['index']}.jpg", tile=(960, 540), columns=2
+            )
+        )
+        offset += job["frames"] / 30
+    if type_sheet := type_crops(folder, plan, jobs):
+        images.append(type_sheet)
+    used = evidence_scenes(scenes)
+    if clicks := click_crops(folder, used):
+        images.append(contact_sheet(folder, clicks, "review-clicks.jpg"))
+    if sources := source_frames(folder, used):
+        images.append(contact_sheet(folder, sources, "review-sources.jpg"))
+    return images
+
+
 def review_film(
     plan: FilmDirection,
     scenes: list[dict],
@@ -804,26 +881,7 @@ def review_film(
             preview=True,
         )
         jobs = json.loads((folder / "motion-jobs.json").read_text())["jobs"]
-        items, offset = [], 0
-        for job in jobs:
-            # JS rounds halves upward. At 30fps selected durations have even frame counts.
-            frames = sorted(
-                {
-                    0,
-                    *[math.floor((job["frames"] - 1) * t + 0.5) for t in (0.2, 0.5, 0.8)],
-                    job["frames"] - 1,
-                }
-            )
-            for frame in frames:
-                items.append(
-                    (
-                        f"preview-{job['index']}-{frame}.jpg",
-                        f"Shot {job['index']} / {offset + frame / 30:.2f}s / frame {frame}",
-                    )
-                )
-            offset += job["frames"] / 30
-        items.extend(source_frames(folder, evidence_scenes(scenes)))
-        image = contact_sheet(folder, items, f"director-review-{attempt}.jpg")
+        images = review_evidence(folder, plan, jobs, scenes)
         prompt = (
             "Critique these actual rendered frames in chronological order, including shot boundaries. "
             'Return JSON {"findings":[{"shot":0,"time":0.5,"problem":"specific visible defect"}]}. '
@@ -841,7 +899,7 @@ def review_film(
             f"Film plan: {plan.model_dump_json()}"
         )
         try:
-            result = reasoner(prompt + creative_context, image, max_tokens=1600, motion=True)
+            result = reasoner(prompt + creative_context, images, max_tokens=1600, motion=True)
             findings = result.get("findings")
             if not isinstance(findings, list) or any(
                 not isinstance(f, dict) or not isinstance(f.get("problem"), str) for f in findings
@@ -874,7 +932,7 @@ def review_film(
                     + "\nRepair the specific rendered defects below. Keep the concept and unaffected shots. "
                     "Return the complete revised film, using exactly the same JSON schema and only existing assets.\n"
                     f"Maximum duration: {target}s. Prior revision rejections: {json.dumps([p.get('rejected_revision') for p in report['passes']])}\nFindings: {json.dumps(findings[:12])}\nExisting film: {plan.model_dump_json()}\nSchema: {json.dumps(FilmDirection.model_json_schema())}",
-                    image,
+                    images,
                     max_tokens=10000,
                     motion=True,
                     effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),

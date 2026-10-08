@@ -59,6 +59,11 @@ def run_compositor(folder: Path, manifest: Path, checkpoint=None):
                 process.wait()
 
 
+def preview_frame_list(frames: int) -> list[int]:
+    """Review stills every half second, plus the settled last frame."""
+    return sorted({*range(0, frames, 15), frames - 1})
+
+
 def footage_width(scene: dict, direction: dict | None) -> int:
     """Decode only the resolution the deepest push-in can show."""
     zooms = [
@@ -205,6 +210,9 @@ def prepare_compositions(
             }
         )
         outputs[i] = folder / f"motion-{i}.mp4"
+    if preview:
+        for job in jobs:
+            job["preview_frames"] = preview_frame_list(job["frames"])
     if jobs:
         manifest = folder / "motion-jobs.json"
         manifest.write_text(json.dumps({"jobs": jobs, "preview": preview}))

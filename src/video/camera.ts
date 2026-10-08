@@ -1,4 +1,8 @@
-// Exact mirror of server/video_camera.py. Change both together; verify_motion_vocabulary checks agreement.
+// Exact mirror of server/video_camera.py; change both together.
+// scripts/verify_motion_vocabulary.py renders fixtures and pixel-checks: the camera crop and zoom
+// (project) on a 2x still, a ring targeted at a click, horizontal parallax drift (drifted with
+// depth 0 vs 1), and line/segments shapes. Not pixel-checked: letterboxed (non-16:9) windows,
+// vertical or zoom drift, elevation, backdrops and fonts.
 export const CANVAS = [1920, 1080] as const;
 type Rect = { x: number; y: number; w: number; h: number };
 type Cam = Rect & { cam_x: number; cam_y: number; cam_zoom: number };

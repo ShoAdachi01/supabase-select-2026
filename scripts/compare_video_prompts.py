@@ -174,6 +174,8 @@ def main():
             def request(*a, provider=provider, model=model, calls=calls, folder=folder, **kw):
                 telemetry = {}
                 call_effort = kw.pop("effort", args.effort)
+                # review_film passes its own telemetry dict to record usage per pass.
+                caller_telemetry = kw.pop("telemetry", None)
                 try:
                     return reason(
                         *a,
@@ -184,6 +186,8 @@ def main():
                         telemetry=telemetry,
                     )
                 finally:
+                    if caller_telemetry is not None:
+                        caller_telemetry.update(telemetry)
                     calls.append(telemetry)
                     (folder / "usage.json").write_text(json.dumps(calls, indent=2))
 

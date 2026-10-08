@@ -48,11 +48,15 @@ Open **http://127.0.0.1:5173**. The browser creates an anonymous Supabase worksp
 
 New **Launch films** use a film-specific director rather than a mandatory opening/spotlight/closing sequence. The director receives actual captured screens, start/end frames from each original recording, interaction timing, and the feature brief; it selects a concept and motion grammar, then composes shots from validated media, shape, and text layers. The web app and REST/MCP accept optional `creative_direction` and up to three `reference_urls`. Existing projects retain their original presets. **Product walkthrough** keeps the browser-footage workflow.
 
-The director can use persistent-object match cuts, container morphs, spring geometry, masks, word reveals, typing entrances, isolated captured details, and deliberate hard cuts. These are primitives, not whole-scene templates. Each shot has a purpose, explicit element states, and local beat coordinates. Captured pixels remain the source of truth; models cannot supply executable code or external asset URLs. Live actions remain large and visible. New title graphics are represented as composed clips referencing a real capture, so no fabricated UI is substituted.
+The director can use persistent-object match cuts, container morphs, spring geometry, masks, word reveals, typing entrances, isolated captured details, and deliberate hard cuts. These are primitives, not whole-scene templates. Each shot has a purpose, explicit element states, and local beat coordinates. Captured pixels remain the source of truth; models cannot supply executable code or external asset URLs. Live actions must stay readable and keep each recorded click in frame. New title graphics are represented as composed clips referencing a real capture, so no fabricated UI is substituted.
 
-Before export, Cutroom renders five actual preview states per shot, including boundaries. The critic also sees original recording frames to distinguish native UI changes from compositor errors. A visual critic scores seven rubric axes (readability, canvas, motion, pacing, typography, continuity, specificity), each backed by timestamped observations, and may request up to **two revisions** (`CUTROOM_REVIEW_PASSES`); a revision that drops any axis by two or more is rejected. Schema/evidence checks reject unknown captures, unsafe assets, out-of-bounds timing, mismatched continuity, insufficient interaction holds, and repeated static treatments. Reports distinguish `passed` (all seven rubric axes ≥ 8 with supporting observations and no blocking defects on the sampled frames), `needs_review` and `unavailable`. The rubric summarizes visible evidence; it is not a guarantee of quality. This is sampled visual review, not continuous video/audio understanding. Planning has three attempts; previews and revisions add model usage and render time. Layout checks compare simultaneous positions so type can enter space vacated by a moving product. Live proof is limited to its captured duration plus a short result hold; extra graphical ideas belong in separate still/detail shots instead of frozen footage. The review precedes narration generation, so speech may subsequently extend a shot on its beat grid.
+The motion vocabulary is declarative and bounded. A **camera** on footage, product and detail layers sets a focal point and zoom (`cam_x`, `cam_y`, `cam_zoom`), or `focus: "click-N"` to frame a recorded click; zoom is capped per source by its measured resolution. Shot **drift** (`x`/`y` up to 0.05 canvas units/s, `zoom` up to 0.04/s, and at most 0.12/0.15 in total per shot) keeps a hold moving, scaled per layer by **depth** 0–1 for parallax. Layers can gain **elevation** (soft shadow). Shots choose a flat or radial **backdrop** with optional grain. **Shapes** are `rect`, `line`, `segments` (rails, sprockets) and `ring`, which can circle a recorded click. Text uses one of three bundled **fonts**: `sans` (Inter), `display` (Instrument Serif) or `mono` (JetBrains Mono). Validation measures readability in the recorded viewport's logical pixels (effective scale ≥ 0.65 while footage is live), checks clicks and text against the drifted geometry the renderer actually draws, and budgets static holds by reading time.
 
-On the OpenAI route, motion planning and visual review use `CUTROOM_MOTION_MODEL` (default `gpt-5.4`, configurable `CUTROOM_MOTION_EFFORT=high`); browser action selection keeps `OPENAI_MODEL`. `CUTROOM_DIRECTOR=claude` selects Anthropic; `ANTHROPIC_MOTION_MODEL` can select a separate motion model without changing browser action selection. Treatments/reference reading/critique use `CUTROOM_MOTION_EFFORT`; animation geometry and repairs use `CUTROOM_GEOMETRY_EFFORT` (default `medium`). Motion calls have a separate token budget and up to a four-minute request timeout. An OpenAI response explicitly truncated by its output budget is retried once with a larger allowance, capped at 32,000 tokens; partial JSON is never accepted as a film plan. The implementation follows the [Responses reasoning API](https://developers.openai.com/api/docs/guides/reasoning).
+Directed captures request a 2x screencast (3840×2160 VP9, capture budget 1.2 GB) and then measure what was actually recorded: `source_scale` is the decoded frame width over the logical viewport width, and `still_scale` the screenshot width over it. Camera zoom caps follow those measured values (between 1.2 and 2); a capture that only delivers 1920-wide frames falls back to the 1x limits instead of producing soft push-ins.
+
+Before export, Cutroom renders preview frames every half second of each shot plus its boundaries and shows the critic: per-shot sheets of those frames, 1:1 crops of each text layer's settled (drifted) rectangle, native crops around up to four recorded clicks per capture, and original recording start/end frames that distinguish native UI changes from compositor errors. Every evidence image is capped at 1568 px on its long edge, the size the model actually sees; the director's own evidence uses the same cap. A visual critic scores seven rubric axes (readability, canvas, motion, pacing, typography, continuity, specificity), each backed by timestamped observations, and may request up to **two revisions** (`CUTROOM_REVIEW_PASSES`); a revision that drops any axis by two or more is rejected. Schema/evidence checks reject unknown captures, unsafe assets, out-of-bounds timing, mismatched continuity, insufficient interaction holds, and repeated static treatments. Reports distinguish `passed` (all seven rubric axes ≥ 8 with supporting observations and no blocking defects such as clipped text, a hidden click or unreadable added type, on the sampled frames), `needs_review` (below that bar after the revision budget; the film still exports, flagged) and `unavailable` (no usable review, for example a missing observation or evidence that could not be built). The studio shows the shipped review's per-axis scores and open findings under the film. `CUTROOM_REVIEW_PASSES` accepts 0–4; a revision rejected by the validator is retried at once and spends a pass. Each pass records the critic's provider, model, latency and token usage. The rubric summarizes visible evidence; it is not a guarantee of quality. This is sampled visual review, not continuous video/audio understanding. Planning has three attempts; previews and revisions add model usage and render time. Layout checks compare simultaneous positions so type can enter space vacated by a moving product. Live proof is limited to its captured duration plus a short result hold; extra graphical ideas belong in separate still/detail shots instead of frozen footage. The review precedes narration generation, so speech may subsequently extend a shot on its beat grid.
+
+On the OpenAI route, motion planning and visual review use `CUTROOM_MOTION_MODEL` (default `gpt-5.4`, configurable `CUTROOM_MOTION_EFFORT=high`); browser action selection keeps `OPENAI_MODEL`. `CUTROOM_DIRECTOR=claude` selects Anthropic; on that route motion planning and review use `ANTHROPIC_MOTION_MODEL` (default `claude-opus-5-5`), while browser action selection keeps `ANTHROPIC_MODEL`. `ANTHROPIC_MOTION_MODEL` no longer falls back to `ANTHROPIC_MODEL`, so set it explicitly to use another motion model. Treatments/reference reading/critique use `CUTROOM_MOTION_EFFORT`; animation geometry and repairs use `CUTROOM_GEOMETRY_EFFORT` (default `medium`). Motion calls have a separate token budget and up to a four-minute request timeout. A Claude or OpenAI motion response explicitly truncated by its output budget is retried once with a larger allowance, capped at 32,000 tokens; partial JSON is never accepted as a film plan. The implementation follows the [Responses reasoning API](https://developers.openai.com/api/docs/guides/reasoning).
 
 Private job artifacts include `director-plan.json`, `style-guide.json`, `beat-grid.json`, preview contact sheets, and `director-review.json`. The reference grammar library is distilled from [mtioon](https://whatships.com/videos/mtioon/) and [Motion](https://whatships.com/videos/motion-opus-5-5/), with [Remotion's frame-based springs](https://www.remotion.dev/docs/spring). It borrows pacing and continuity techniques, not logos, characters, copy, or footage. Public reference URLs now resolve to direct MP4/WebM/images or media declared in a page’s video/Open Graph tags or JSON-LD VideoObject data. Each connection and redirect is pinned to a validated public IP. Downloads are capped at 32 MB; video analysis samples every 0.5 seconds for at most the first 24 seconds. Still-image analysis explicitly marks motion and sound as unobserved. Authenticated players, JavaScript-only embeds, and blocked media are not supported; failed references are reported and the feature brief remains usable. External reference assets are never inserted into the customer film. Audio and exact easing are not inferred from frame samples.
 
@@ -80,17 +84,17 @@ Keys stay on the server. Provider configuration is reread for each request so lo
 
 ## Animation and technology
 
-| Layer | Implementation |
-| --- | --- |
-| Browser direction and copy | OpenAI Responses; optional Claude |
-| Actual app footage | Isolated Playwright Chromium |
-| Stock narration | OpenAI `gpt-4o-mini-tts` |
-| Custom voice cloning | Optional ElevenLabs |
-| Background music | Original local NumPy synthesis; FFmpeg ducks it under speech |
-| Editable motion graphics | Remotion/React compositions with real product assets; legacy Pillow titles remain supported |
-| Generated visual backgrounds | Optional Google Veo 3.1 Fast through Gemini API, or OpenAI Sora 2 |
-| Composition and transitions | FFmpeg, including synchronized video dissolves and audio crossfades |
-| Workspace and private exports | Supabase Auth, Postgres/RLS, Storage |
+| Layer                         | Implementation                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| Browser direction and copy    | OpenAI Responses; optional Claude                                                           |
+| Actual app footage            | Isolated Playwright Chromium                                                                |
+| Stock narration               | OpenAI `gpt-4o-mini-tts`                                                                    |
+| Custom voice cloning          | Optional ElevenLabs                                                                         |
+| Background music              | Original local NumPy synthesis; FFmpeg ducks it under speech                                |
+| Editable motion graphics      | Remotion/React compositions with real product assets; legacy Pillow titles remain supported |
+| Generated visual backgrounds  | Optional Google Veo 3.1 Fast through Gemini API, or OpenAI Sora 2                           |
+| Composition and transitions   | FFmpeg, including synchronized video dissolves and audio crossfades                         |
+| Workspace and private exports | Supabase Auth, Postgres/RLS, Storage                                                        |
 
 Built-in motion graphics work without a video-generation service. Their text is rendered from the editable timeline, with real captured imagery for product reveals. **Animation** can request one four-second 720p visual using provider credits. Configure `GEMINI_API_KEY` for Veo, or `OPENAI_API_KEY` for Sora. Model availability in a key's model list does not guarantee video-endpoint access or generation quota. The tested Gemini key lists Veo but currently returns a generation quota/billing error; the tested Sora endpoint returns 404. These integrations are implemented and provider contracts are tested, but a successful live model-generated clip has not been verified with these accounts.
 
@@ -108,17 +112,17 @@ claude mcp add --transport http cutroom http://127.0.0.1:8000/mcp --header "Auth
 
 For a remote agent, replace localhost with the deployed server origin.
 
-| Tool | Purpose |
-| --- | --- |
+| Tool                   | Purpose                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
 | `create_product_video` | Submit URL, brief, optional credentials, narrator, target duration, and style. Returns a job ID. |
-| `get_video` | Poll status, progress, scenes, editable narration, and export metadata. |
-| `list_videos` | List this authenticated workspace’s projects. |
-| `list_voices` | List stock narrators and this workspace’s custom voices. |
-| `render_video` | Edit narration, voice, music, or theme without another capture. |
-| `export_video` | Return a private MP4 playback/download URL valid for 30 minutes. |
-| `cancel_video` | Cancel at the next stage boundary. |
-| `plan_launch_video` | Draft editable opening, benefit, and closing scenes from verified product footage. |
-| `generate_animation` | Request one four- or eight-second Veo/Sora visual and poll the video's assets. |
+| `get_video`            | Poll status, progress, scenes, editable narration, and export metadata.                          |
+| `list_videos`          | List this authenticated workspace’s projects.                                                    |
+| `list_voices`          | List stock narrators and this workspace’s custom voices.                                         |
+| `render_video`         | Edit narration, voice, music, or theme without another capture.                                  |
+| `export_video`         | Return a private MP4 playback/download URL valid for 30 minutes.                                 |
+| `cancel_video`         | Cancel at the next stage boundary.                                                               |
+| `plan_launch_video`    | Draft editable opening, benefit, and closing scenes from verified product footage.               |
+| `generate_animation`   | Request one four- or eight-second Veo/Sora visual and poll the video's assets.                   |
 
 Submit a job and poll `get_video` until complete, failed, or cancelled. Then call `export_video`. The prototype supports authenticated Streamable HTTP and has been checked with the official MCP SDK. Session tokens expire; this implementation does **not** include a public OAuth discovery/authorization flow for one-click connector installation.
 
@@ -158,6 +162,7 @@ The short-film integration produced a 22.8-second narrated 1080p sample through 
 npm run build          # TypeScript checks and production frontend build
 npm run lint           # Ruff and Prettier
 npm test               # Deterministic backend tests; no provider credentials required
+npm run test:motion    # Renders vocabulary fixtures locally (Remotion + Chromium) and pixel-checks camera, ring, parallax drift, line and segments
 npm run test:mcp       # Official MCP SDK handshake and tools against real Supabase
 npm run test:video:e2e # Full web flow, real capture, narration, render, private playback, MCP export
 npm run test:login     # Basic login, session transfer, incorrect-credential rejection

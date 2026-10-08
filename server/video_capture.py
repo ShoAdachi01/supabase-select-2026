@@ -30,34 +30,39 @@ def encode_directed_capture(folder: Path):
     lines.append(f"file '{frames[-1]['name']}'")
     manifest = folder / "capture.ffconcat"
     manifest.write_text("\n".join(lines))
-    ffmpeg(
-        "-f",
-        "concat",
-        "-safe",
-        "1",
-        "-i",
-        str(manifest),
-        "-an",
-        "-vf",
-        "fps=30,scale='min(3840,trunc(iw/2)*2)':-2:in_range=pc:out_range=tv,format=yuv420p",
-        "-color_range",
-        "tv",
-        "-t",
-        str(total),
-        "-c:v",
-        "libvpx-vp9",
-        "-crf",
-        "20",
-        "-b:v",
-        "0",
-        "-row-mt",
-        "1",
-        "-deadline",
-        "good",
-        "-cpu-used",
-        "4",
-        str(folder / "raw.webm"),
-    )
+    # A 4K VP9 encode runs well below realtime; budget it by recording length.
+    try:
+        ffmpeg(
+            "-f",
+            "concat",
+            "-safe",
+            "1",
+            "-i",
+            str(manifest),
+            "-an",
+            "-vf",
+            "fps=30,scale='min(3840,trunc(iw/2)*2)':-2:in_range=pc:out_range=tv,format=yuv420p",
+            "-color_range",
+            "tv",
+            "-t",
+            str(total),
+            "-c:v",
+            "libvpx-vp9",
+            "-crf",
+            "20",
+            "-b:v",
+            "0",
+            "-row-mt",
+            "1",
+            "-deadline",
+            "good",
+            "-cpu-used",
+            "4",
+            str(folder / "raw.webm"),
+            timeout=max(300, round(total * 20)),
+        )
+    except subprocess.TimeoutExpired:
+        raise ValueError("Encoding the recording took too long.") from None
 
 
 def probe(path: Path) -> tuple[int, int, float]:

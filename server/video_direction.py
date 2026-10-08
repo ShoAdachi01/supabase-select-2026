@@ -9,6 +9,7 @@ import math
 import re
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 import imageio_ffmpeg
 from PIL import Image, ImageDraw
@@ -877,10 +878,12 @@ def review_evidence(
     return images[:MAX_EVIDENCE_IMAGES]
 
 
-def gate(review: FilmReview) -> str:
-    return (
-        "passed" if min(review.scores().values()) >= 8 and not review.blocking else "needs_review"
-    )
+def gate(review: FilmReview) -> Literal["passed", "needs_review"]:
+    """Pass only when every axis is at least 8 and no finding, top-level or nested, is blocking."""
+    nested = any(f.blocking for a in AXES for f in getattr(review, a).findings)
+    if min(review.scores().values()) >= 8 and not review.blocking and not nested:
+        return "passed"
+    return "needs_review"
 
 
 def regressed(before: FilmReview, after: FilmReview) -> list[str]:
@@ -902,6 +905,7 @@ List blocking defects separately: clipped_text (settled text cropped), hidden_cl
 action outside the frame or covered), unreadable_type (added text illegible). Do not invent
 criticism of strong work; a score of 8-10 needs observations, not defects.
 Focus on OUR composition, not the customer's UI styling. RAW frames show native UI changes.
+Never request UI that is absent from the source frame, recoloring product pixels, or enlarging every native UI label. Live footage includes a short cursor lead-in before the destination; that is not a duplicated shot. White or light added type on a light screenshot is a readability defect.
 Images: per-shot sheets, settled type crops, click crops, RAW source frames.
 Return JSON matching this schema: """
 
@@ -1020,14 +1024,14 @@ def review_film(
             revised = constrain_geometry(revised, scenes)
             issues = validate_evidence(revised, scenes, target)
             if issues:
-                entry["rejected_revision"] = issues
+                entry.setdefault("rejected_revision", []).extend(issues)
                 continue
             plan = candidate = revised
         except ProviderError as exc:
-            entry["rejected_revision"] = [str(exc)]
+            entry.setdefault("rejected_revision", []).append(str(exc))
             break
         except (ValueError, TypeError) as exc:
-            entry["rejected_revision"] = [str(exc)[:2000]]
+            entry.setdefault("rejected_revision", []).append(str(exc)[:2000])
     if best_review is not None:
         report["status"] = gate(best_review)
     save_direction(folder, best_plan)

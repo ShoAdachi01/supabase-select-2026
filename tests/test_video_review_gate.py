@@ -144,3 +144,60 @@ def test_revision_that_regresses_an_axis_is_rejected(tmp_path, monkeypatch):
     assert report["passes"][1]["rejected_revision"] == ["Regressed typography"]
     assert report["status"] == "needs_review"
     assert plan.concept == original.concept
+
+
+def test_blocking_finding_nested_under_an_axis_fails_the_gate():
+    data = review()
+    data["typography"] = axis(
+        8,
+        [
+            {
+                "shot": 2,
+                "time": 6.0,
+                "problem": "Headline is cropped at the right edge.",
+                "change": "Shorten the line so it fits.",
+                "blocking": "clipped_text",
+            }
+        ],
+    )
+    assert director.gate(FilmReview.model_validate(data)) == "needs_review"
+
+
+def test_critic_prompt_keeps_source_guards():
+    for phrase in (
+        "Never request UI that is absent from the source frame",
+        "recoloring product pixels",
+        "enlarging every native UI label",
+        "short cursor lead-in before the destination; that is not a duplicated shot",
+        "White or light added type on a light screenshot is a readability defect.",
+    ):
+        assert phrase in director.CRITIC
+
+
+def test_regression_rejection_survives_a_later_invalid_revision(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+    revised = film().model_dump()
+    revised["concept"] = "A revised concept that follows the same product action."
+    first = review(canvas=6) | {"canvas": axis(6, FIX)}
+    worse = review(canvas=6, typography=7) | {
+        "canvas": axis(6, FIX),
+        "typography": axis(7, FIX),
+    }
+    answers = iter([first, revised, worse, revised, first])
+    checks = iter([[], ["Shot 0 holds too long."]])
+    monkeypatch.setattr(director, "validate_evidence", lambda *a: next(checks))
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
+    prompts = []
+
+    def reasoner(prompt, *a, **k):
+        prompts.append(prompt)
+        return next(answers)
+
+    _, report = director.review_film(film(), sources(), tmp_path, "paper", 30, reasoner=reasoner)
+    assert report["passes"][1]["rejected_revision"] == [
+        "Regressed typography",
+        "Shot 0 holds too long.",
+    ]
+    saved = json.loads((tmp_path / "director-review.json").read_text())
+    assert saved["passes"][1]["rejected_revision"][0] == "Regressed typography"
+    assert "Regressed typography" in prompts[3]

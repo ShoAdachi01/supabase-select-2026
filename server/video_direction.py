@@ -17,7 +17,9 @@ from PIL import Image, ImageDraw
 from server.video_camera import (
     click_point,
     clicks,
+    drifted,
     effective_scale,
+    project,
     resolve_focus,
     visible_window,
     zoom_cap,
@@ -28,7 +30,6 @@ from server.video_direction_models import (
     FilmDirection,
     FilmReview,
     FilmTreatment,
-    MotionState,
 )
 from server.video_models import TimelineClip
 from server.video_prompts import PROMPT_VERSION, TREATMENT, enriched_prompt
@@ -344,10 +345,6 @@ def hold_budget(shot, start_beat: float) -> float:
     return max(1.2, 0.3 * words + 0.6, 2.0 if landed else 0)
 
 
-def layout_state(layer, beat: float) -> MotionState:
-    return MotionState.model_validate({**layout_at(layer, beat), "beat": beat})
-
-
 def layout_at(layer, beat: float) -> dict:
     """Sample planned rectangles for layout checks; rendering owns exact spring physics."""
     for before, after in zip(layer.states, layer.states[1:], strict=False):
@@ -383,6 +380,23 @@ def covers(backing: dict, text: dict) -> bool:
     )
 
 
+def placed_at(shot, layer, beat: float, state: dict | None = None) -> dict:
+    """The rectangle the renderer actually draws at a beat: planned geometry plus shot drift."""
+    return drifted(
+        state if state is not None else layout_at(layer, beat),
+        shot.drift.model_dump(),
+        layer.depth,
+        beat * 60 / shot.bpm,
+    )
+
+
+def drift_samples(shot, layer) -> list[tuple[float, dict]]:
+    """Each keyframe and the shot end, where drift has carried a layer furthest."""
+    samples = [(state.beat, state.model_dump()) for state in layer.states]
+    samples.append((float(shot.beats), layout_at(layer, shot.beats)))
+    return [(beat, placed_at(shot, layer, beat, state)) for beat, state in samples]
+
+
 def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> list[str]:
     """Concrete quality gates supplement the schema and the visual critic."""
     issues = []
@@ -400,6 +414,15 @@ def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> l
         if source is None:
             issues.append(f"{prefix}: unknown capture {shot.source}.")
             continue
+        duration = shot.beats * 60 / shot.bpm
+        if (
+            max(abs(shot.drift.x), abs(shot.drift.y)) * duration > 0.12 + 1e-9
+            or abs(shot.drift.zoom) * duration > 0.15 + 1e-9
+        ):
+            issues.append(
+                f"{prefix}: drift travels too far over {duration:.2f}s (at most 0.12 canvas "
+                "units on x/y and 0.15 zoom per shot); reduce drift."
+            )
         footage = [layer for layer in shot.layers if layer.kind == "footage"]
         if len(footage) > 1:
             issues.append(f"{prefix}: use at most one live footage layer.")
@@ -422,33 +445,37 @@ def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> l
             view = source.get("viewport", {"width": 1920, "height": 1080})
             seconds = shot.beats * 60 / shot.bpm
             beats_per_second = shot.bpm / 60
-            for state in footage[0].states:
-                if state.opacity > 0.5 and effective_scale(state, view) < 0.65:
+            for beat, state in drift_samples(shot, footage[0]):
+                if state["opacity"] > 0.5 and effective_scale(state, view) < 0.65:
                     issues.append(
-                        f"{prefix}: live footage is not readable at beat {state.beat:g} "
+                        f"{prefix}: live footage is not readable at beat {beat:g} "
                         f"(scale {effective_scale(state, view):.2f} < 0.65). Enlarge it or push the camera in."
                     )
                     break
-                edge = min(state.beat, shot.beats - state.beat) / beats_per_second
-                if state.opacity < 0.98 and edge > 0.3:
+                edge = min(beat, shot.beats - beat) / beats_per_second
+                if state["opacity"] < 0.98 and edge > 0.3:
                     issues.append(f"{prefix}: footage may only fade within 0.3s of a shot edge.")
                     break
             recorded = clicks(source)
             for name, at in click_seconds(shot, source):
                 if not 0 <= at < seconds or "x" not in recorded[int(name[6:])]:
                     continue
-                state = layout_state(footage[0], at * beats_per_second)
-                left, top, width, height = visible_window(state, (view["width"], view["height"]))
+                state = placed_at(shot, footage[0], at * beats_per_second)
+                aspect = (view["width"], view["height"])
+                left, top, width, height = visible_window(state, aspect)
                 px, py = click_point(source, name)
+                cx, cy = project(state, aspect, px, py)
                 margin = 0.04
                 if not (
                     left + margin * width <= px <= left + width * (1 - margin)
                     and top + margin * height <= py <= top + height * (1 - margin)
+                    and 0.025 <= cx <= 0.975
+                    and 0.025 <= cy <= 0.975
                 ):
                     issues.append(
                         f"{prefix}: {name} happens outside the camera frame at {at:.2f}s. Keep the action in view."
                     )
-                if state.opacity < 0.98:
+                if state["opacity"] < 0.98:
                     issues.append(f"{prefix}: footage must be opaque while {name} happens.")
         words = sum(len(layer.text.split()) for layer in shot.layers if layer.kind == "text")
         if words > 8:
@@ -477,9 +504,12 @@ def validate_evidence(plan: FilmDirection, scenes: list[dict], target: int) -> l
             ):
                 issues.append(f"{prefix}: {layer.kind} was not captured.")
             if layer.kind == "text":
-                visible = [s for s in layer.states if s.opacity > 0.5]
+                visible = [s for _, s in drift_samples(shot, layer) if s["opacity"] > 0.5]
                 if not visible or any(
-                    s.x < 0.025 or s.y < 0.025 or s.x + s.w > 0.975 or s.y + s.h > 0.975
+                    s["x"] < 0.025
+                    or s["y"] < 0.025
+                    or s["x"] + s["w"] > 0.975
+                    or s["y"] + s["h"] > 0.975
                     for s in visible
                 ):
                     issues.append(f"{prefix}: keep readable text inside 2.5% safe margins.")
@@ -797,7 +827,7 @@ def encode_sheet(canvas: Image.Image, folder: Path, name: str) -> str:
 
 
 def type_crops(folder: Path, plan: FilmDirection, jobs: list[dict]) -> list[str]:
-    """Crop each text layer's settled rectangle 1:1 from the shot's last preview frame.
+    """Crop each text layer's settled, drifted rectangle 1:1 from the shot's last preview frame.
 
     Crops are shelf-packed into sheets of at most MAX_EDGE on each side; only a crop
     larger than a sheet is scaled down.
@@ -809,14 +839,16 @@ def type_crops(folder: Path, plan: FilmDirection, jobs: list[dict]) -> list[str]
         with Image.open(folder / f"preview-{job['index']}-{job['frames'] - 1}.jpg") as opened:
             frame = opened.convert("RGB")
         width, height = frame.size
-        for layer in plan.shots[job["index"]].layers:
+        shot = plan.shots[job["index"]]
+        for layer in shot.layers:
             if layer.kind != "text" or not layer.states:
                 continue
-            last = layer.states[-1]
-            left = max(0, int(last.x * width) - 24)
-            top = max(0, int(last.y * height) - 24)
-            right = min(width, math.ceil((last.x + last.w) * width) + 24)
-            bottom = min(height, math.ceil((last.y + last.h) * height) + 24)
+            # The last preview frame is the shot end, where drift has moved the type furthest.
+            last = placed_at(shot, layer, shot.beats, layer.states[-1].model_dump())
+            left = max(0, int(last["x"] * width) - 24)
+            top = max(0, int(last["y"] * height) - 24)
+            right = min(width, math.ceil((last["x"] + last["w"]) * width) + 24)
+            bottom = min(height, math.ceil((last["y"] + last["h"]) * height) + 24)
             if right > left and bottom > top:
                 crop = frame.crop((left, top, right, bottom))
                 if crop.width > MAX_EDGE or crop.height > MAX_EDGE:

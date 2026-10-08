@@ -520,3 +520,80 @@ def test_review_sheets_stay_within_critic_image_size(tmp_path):
             assert max(sheet.size) <= 1568
     with Image.open(tmp_path / "review-type-0.jpg") as sheet:
         assert sheet.width == 1568
+
+
+def drifting(plan, **drift):
+    data = plan.model_dump()
+    for shot in data["shots"]:
+        shot["drift"] = {"x": 0, "y": 0, "zoom": 0, **drift}
+    return FilmDirection.model_validate(data)
+
+
+def test_negative_zoom_drift_can_make_footage_unreadable():
+    scenes = scaled()
+    plan = with_footage_state(x=0.15, y=0.15, w=0.7, h=0.7)
+    assert not any("readable" in i for i in director.validate_evidence(plan, scenes, 30))
+    shrinking = drifting(plan, zoom=-0.04)  # 0.70 -> 0.62 by the end of the 3s shot
+    issues = director.validate_evidence(shrinking, scenes, 30)
+    assert any("not readable" in i for i in issues)
+
+
+def test_drift_that_carries_the_click_off_canvas_is_rejected():
+    scenes = scaled(x=1800, y=540)
+    for scene in scenes:
+        scene["interactions"][0]["time"] = scene["start"] + 2.5  # drifted 0.1 right by then
+    plan = with_footage_state()
+    assert not any("click-0" in i for i in director.validate_evidence(plan, scenes, 30))
+    issues = director.validate_evidence(drifting(plan, x=0.04), scenes, 30)
+    assert any("click-0" in i and "frame" in i for i in issues)
+
+
+def test_drift_that_pushes_text_off_canvas_is_rejected():
+    data = film().model_dump()
+    data["shots"][0]["layers"].append(
+        dict(
+            id="t",
+            kind="text",
+            text="Ship",
+            states=[dict(beat=0, x=0.8, y=0.05, w=0.15, h=0.1)],
+        )
+    )
+    plan = FilmDirection.model_validate(data)
+    assert not any("safe margins" in i for i in director.validate_evidence(plan, sources(), 30))
+    issues = director.validate_evidence(drifting(plan, x=0.04), sources(), 30)
+    assert any("safe margins" in i for i in issues)
+
+
+@pytest.mark.parametrize(
+    "drift, beats, rejected",
+    [
+        ({"x": 0.04}, 6, False),  # 0.12 canvas units over 3s
+        ({"x": 0.05}, 6, True),  # 0.15
+        ({"y": -0.05}, 6, True),
+        ({"zoom": 0.04}, 6, False),  # 0.12
+        ({"zoom": 0.03}, 12, True),  # 0.18 over 6s
+    ],
+)
+def test_total_drift_is_bounded(drift, beats, rejected):
+    plan = drifting(film(), **drift)
+    plan.shots[0].beats = beats
+    plan.shots[0].layers[0].states[-1].beat = beats
+    issues = director.validate_evidence(plan, sources(), 30)
+    assert any("Shot 0" in i and "reduce drift" in i for i in issues) == rejected
+
+
+def test_type_crop_follows_the_drifted_text(tmp_path):
+    data = film().model_dump()
+    data["shots"][0]["drift"] = {"x": 0.04, "y": 0, "zoom": 0}
+    data["shots"][0]["layers"].append(
+        dict(id="t", kind="text", text="Ship", states=[dict(beat=0, x=0.1, y=0.1, w=0.2, h=0.1)])
+    )
+    plan = FilmDirection.model_validate(data)
+    frame = Image.new("RGB", (1920, 1080), "white")
+    # The renderer draws the text 0.12 canvas units right of its planned rectangle at 3s.
+    frame.paste((220, 20, 20), (round(0.22 * 1920), 108, round(0.42 * 1920), 216))
+    frame.save(tmp_path / "preview-0-89.jpg")
+    director.type_crops(tmp_path, plan, [{"index": 0, "frames": 90}])
+    with Image.open(tmp_path / "review-type-0.jpg") as sheet:
+        r, g, b = sheet.convert("RGB").getpixel((sheet.width // 2, sheet.height // 2))
+    assert r > 180 and g < 80

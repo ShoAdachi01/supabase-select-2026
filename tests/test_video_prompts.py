@@ -522,3 +522,49 @@ def test_click_crops_cut_a_native_box_around_each_recorded_click(tmp_path):
         assert b > 200 and r < 60
     assert director.click_crops(tmp_path, scenes) == crops
     assert director.click_crops(tmp_path / "missing", scenes) == []
+
+
+def test_reasoner_sends_every_image_in_order(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kw: (
+            calls.append(kw["json"]),
+            httpx.Response(
+                200, json={"stop_reason": "end_turn", "content": [{"type": "text", "text": "{}"}]}
+            ),
+        )[1],
+    )
+    providers.reason("Review", ["AAA", "BBB"], motion=True)
+    images = [
+        b["source"]["data"] for b in calls[0]["messages"][0]["content"] if b["type"] == "image"
+    ]
+    assert images == ["AAA", "BBB"]
+
+
+def test_reasoner_openai_sends_every_image_in_order(monkeypatch):
+    def openai_settings(name, default=""):
+        return {"OPENAI_API_KEY": "sk-test-key"}.get(name, default)
+
+    monkeypatch.setattr(providers, "setting", openai_settings)
+    calls = []
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kw: (
+            calls.append(kw["json"]),
+            httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "usage": {"output_tokens": 100},
+                    "output": [{"content": [{"type": "output_text", "text": "{}"}]}],
+                },
+            ),
+        )[1],
+    )
+    providers.reason("Review", ["AAA", "BBB"], motion=True)
+    images = [b["image_url"] for b in calls[0]["input"][0]["content"] if b["type"] == "input_image"]
+    assert images == ["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBB"]

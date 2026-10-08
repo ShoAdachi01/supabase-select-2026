@@ -78,7 +78,7 @@ def reasoning_request(url: str, *, motion: bool, **kwargs) -> httpx.Response:
 
 def reason(
     prompt: str,
-    screenshot: str | None = None,
+    screenshot: str | list[str] | None = None,
     *,
     max_tokens: int = 1800,
     motion: bool = False,
@@ -116,20 +116,17 @@ def reason(
     selected_effort = effort or setting("CUTROOM_MOTION_EFFORT", "high")
     if selected_effort not in ("low", "medium", "high"):
         raise ValueError("Motion effort must be low, medium, or high")
+    images = [screenshot] if isinstance(screenshot, str) else list(screenshot or [])
     started = time.monotonic()
     if use_claude:
         if not setting("ANTHROPIC_API_KEY"):
             raise ProviderError("Configure ANTHROPIC_API_KEY for the selected director.")
         content = [{"type": "text", "text": prompt}]
-        if screenshot:
+        for image in images:
             content.append(
                 {
                     "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": screenshot,
-                    },
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": image},
                 }
             )
         request_body = {
@@ -187,10 +184,8 @@ def reason(
         if not setting("OPENAI_API_KEY"):
             raise ValueError("Configure OPENAI_API_KEY or ANTHROPIC_API_KEY to direct a real app.")
         content = [{"type": "input_text", "text": "Return a JSON object.\n" + prompt}]
-        if screenshot:
-            content.append(
-                {"type": "input_image", "image_url": f"data:image/jpeg;base64,{screenshot}"}
-            )
+        for image in images:
+            content.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"})
         request_body = {
             "model": selected_model,
             **(

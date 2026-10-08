@@ -358,3 +358,38 @@ def test_rejected_revisions_count_against_the_pass_budget(tmp_path, monkeypatch)
     assert len(calls) == 1
     assert report["passes"][0]["rejected_revision"] == ["Shot 0 holds too long."] * 2
     assert report["status"] == "needs_review"
+
+
+def test_critic_and_revision_usage_is_recorded_on_each_pass(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+    revised = film().model_dump()
+    first = review(canvas=6) | {"canvas": axis(6, FIX)}
+    answers = iter([first, revised, review()])
+    budgets = []
+
+    def reasoner(prompt, images, *, telemetry=None, **k):
+        critic = prompt.startswith("Score these")
+        if critic:
+            budgets.append(k["max_tokens"])
+        telemetry.update(
+            provider="claude",
+            model="claude-opus-5-5",
+            effort="high",
+            seconds=1.5,
+            usage={"output_tokens": 900 if critic else 4000},
+            usage_attempts=[{"output_tokens": 900 if critic else 4000}],
+            prompt="secret prompt text",
+        )
+        return next(answers)
+
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
+    _, report = director.review_film(film(), sources(), tmp_path, "paper", 30, reasoner=reasoner)
+    assert budgets == [12000, 12000]
+    keys = {"provider", "model", "seconds", "usage", "usage_attempts"}
+    for entry in report["passes"]:
+        assert set(entry["usage"]) == keys
+        assert entry["usage"]["usage"] == {"output_tokens": 900}
+    (revision,) = report["passes"][0]["revision_usage"]
+    assert set(revision) == keys and revision["usage"] == {"output_tokens": 4000}
+    assert "revision_usage" not in report["passes"][1]
+    assert "secret prompt text" not in (tmp_path / "director-review.json").read_text()

@@ -928,6 +928,14 @@ def revision_brief(review: FilmReview) -> str:
     )
 
 
+USAGE_KEYS = ("provider", "model", "seconds", "usage", "usage_attempts")
+
+
+def usage_record(telemetry: dict) -> dict:
+    """Provider accounting only: never prompts, images or credentials."""
+    return {k: telemetry[k] for k in USAGE_KEYS if k in telemetry}
+
+
 def review_passes() -> int:
     """CUTROOM_REVIEW_PASSES as a revision budget of 0-4; anything non-integer means 2."""
     try:
@@ -1002,16 +1010,32 @@ def review_film(
             + json.dumps(FilmReview.model_json_schema())
             + f"\nFilm plan: {plan.model_dump_json()}"
         )
+        telemetry: dict = {}
         try:
             review = FilmReview.model_validate(
-                reasoner(prompt + creative_context, images, max_tokens=4000, motion=True)
+                reasoner(
+                    prompt + creative_context,
+                    images,
+                    max_tokens=12000,
+                    motion=True,
+                    telemetry=telemetry,
+                )
             )
         except (ValueError, TypeError):
             report["passes"].append(
-                {"attempt": attempt, "error": "Visual review did not return a usable report."}
+                {
+                    "attempt": attempt,
+                    "error": "Visual review did not return a usable report.",
+                    "usage": usage_record(telemetry),
+                }
             )
             break
-        entry = {"attempt": attempt, "scores": review.scores(), "review": review.model_dump()}
+        entry = {
+            "attempt": attempt,
+            "scores": review.scores(),
+            "review": review.model_dump(),
+            "usage": usage_record(telemetry),
+        }
         report["passes"].append(entry)
         (folder / f"director-plan-{attempt}.json").write_text(plan.model_dump_json(indent=2))
         drops = regressed(best_review, review) if candidate is not None else []
@@ -1034,6 +1058,7 @@ def review_film(
             rejections = [
                 p["rejected_revision"] for p in report["passes"] if p.get("rejected_revision")
             ]
+            revision_telemetry: dict = {}
             try:
                 revised = FilmDirection.model_validate(
                     reasoner(
@@ -1048,6 +1073,7 @@ def review_film(
                         max_tokens=10000,
                         motion=True,
                         effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
+                        telemetry=revision_telemetry,
                     )
                 )
                 revised = constrain_geometry(revised, scenes)
@@ -1062,6 +1088,9 @@ def review_film(
                 budget = 0
             except (ValueError, TypeError) as exc:
                 entry.setdefault("rejected_revision", []).append(str(exc)[:2000])
+            finally:
+                if revision_telemetry:
+                    entry.setdefault("revision_usage", []).append(usage_record(revision_telemetry))
         if candidate is None:
             break
         plan = candidate

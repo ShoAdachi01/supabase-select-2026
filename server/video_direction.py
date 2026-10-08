@@ -950,7 +950,8 @@ def review_film(
     """Score rendered frames on a seven-axis rubric, with a bounded number of revisions.
 
     A revision is kept only if it passes the evidence validator and its re-score drops no
-    axis by two or more. The report summarizes sampled visual evidence, not certified quality.
+    axis by two or more. Every revision request, accepted or not, spends one pass of the
+    budget. The report summarizes sampled visual evidence, not certified quality.
     """
     from server.video_composition import prepare_compositions
     from server.video_timeline import compile_timeline
@@ -961,15 +962,18 @@ def review_film(
         creative_context = (
             "\nPreserve the selected treatment: " + (folder / "director-treatment.json").read_text()
         )
-    passes = review_passes()
+    budget = review_passes()
     report = {
         "status": "unavailable",
         "rubric": "film-rubric-v1",
         "passes": [],
         "revision_count": 0,
     }
-    best_plan, best_review, candidate = plan, None, None
-    for attempt in range(passes + 1):
+    # The best plan, its review and the frames that review saw always travel together, so
+    # a revision never reads frames of a different (rejected) film.
+    best_plan, best_review, best_images, candidate = plan, None, [], None
+    attempt = 0
+    while True:
         if checkpoint:
             checkpoint()
         clips = compile_direction(plan, scenes)
@@ -992,8 +996,6 @@ def review_film(
             report["passes"].append(
                 {"attempt": attempt, "error": "Visual review evidence could not be built."}
             )
-            if candidate is not None:
-                plan = best_plan
             break
         prompt = (
             CRITIC
@@ -1008,8 +1010,6 @@ def review_film(
             report["passes"].append(
                 {"attempt": attempt, "error": "Visual review did not return a usable report."}
             )
-            if candidate is not None:
-                plan = best_plan
             break
         entry = {"attempt": attempt, "scores": review.scores(), "review": review.model_dump()}
         report["passes"].append(entry)
@@ -1017,48 +1017,55 @@ def review_film(
         drops = regressed(best_review, review) if candidate is not None else []
         if drops:
             entry["rejected_revision"] = [f"Regressed {axis}" for axis in drops]
-            plan = best_plan
         else:
             if candidate is not None:
                 report["revision_count"] += 1
-            best_plan, best_review = plan, review
+            best_plan, best_review, best_images = plan, review, images
             report["final"] = {
                 "attempt": attempt,
                 "scores": review.scores(),
                 "review": review.model_dump(),
             }
         candidate = None
-        if gate(best_review) == "passed" or attempt == passes:
-            break
-        if checkpoint:
-            checkpoint()
-        try:
-            revised = FilmDirection.model_validate(
-                reasoner(
-                    enriched_prompt(RULES, "detailed")
-                    + creative_context
-                    + "\nRevise the film to raise the lowest rubric axes and clear every blocking defect. "
-                    "Keep the concept and unaffected shots. "
-                    "Return the complete revised film, using exactly the same JSON schema and only existing assets.\n"
-                    f"Maximum duration: {target}s. Prior revision rejections: {json.dumps([p.get('rejected_revision') for p in report['passes']])}\n"
-                    f"{revision_brief(best_review)}\nExisting film: {best_plan.model_dump_json()}\nSchema: {json.dumps(FilmDirection.model_json_schema())}",
-                    images,
-                    max_tokens=10000,
-                    motion=True,
-                    effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
+        while budget > 0 and candidate is None and gate(best_review) != "passed":
+            budget -= 1
+            if checkpoint:
+                checkpoint()
+            rejections = [
+                p["rejected_revision"] for p in report["passes"] if p.get("rejected_revision")
+            ]
+            try:
+                revised = FilmDirection.model_validate(
+                    reasoner(
+                        enriched_prompt(RULES, "detailed")
+                        + creative_context
+                        + "\nRevise the film to raise the lowest rubric axes and clear every blocking defect. "
+                        "Keep the concept and unaffected shots. "
+                        "Return the complete revised film, using exactly the same JSON schema and only existing assets.\n"
+                        f"Maximum duration: {target}s. Prior revision rejections: {json.dumps(rejections)}\n"
+                        f"{revision_brief(best_review)}\nExisting film: {best_plan.model_dump_json()}\nSchema: {json.dumps(FilmDirection.model_json_schema())}",
+                        best_images,
+                        max_tokens=10000,
+                        motion=True,
+                        effort=geometry_effort or setting("CUTROOM_GEOMETRY_EFFORT", "medium"),
+                    )
                 )
-            )
-            revised = constrain_geometry(revised, scenes)
-            issues = validate_evidence(revised, scenes, target)
-            if issues:
-                entry.setdefault("rejected_revision", []).extend(issues)
-                continue
-            plan = candidate = revised
-        except ProviderError as exc:
-            entry.setdefault("rejected_revision", []).append(str(exc))
+                revised = constrain_geometry(revised, scenes)
+                issues = validate_evidence(revised, scenes, target)
+                if issues:
+                    # The best plan is unchanged; retry at once instead of re-scoring it.
+                    entry.setdefault("rejected_revision", []).extend(issues)
+                    continue
+                candidate = revised
+            except ProviderError as exc:
+                entry.setdefault("rejected_revision", []).append(str(exc))
+                budget = 0
+            except (ValueError, TypeError) as exc:
+                entry.setdefault("rejected_revision", []).append(str(exc)[:2000])
+        if candidate is None:
             break
-        except (ValueError, TypeError) as exc:
-            entry.setdefault("rejected_revision", []).append(str(exc)[:2000])
+        plan = candidate
+        attempt += 1
     if best_review is not None:
         report["status"] = gate(best_review)
     save_direction(folder, best_plan)

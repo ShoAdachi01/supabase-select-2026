@@ -281,3 +281,80 @@ def test_evidence_failure_makes_the_pass_unavailable_not_an_exception(tmp_path, 
     assert report["status"] == "unavailable"
     assert report["passes"][0]["attempt"] == 0 and "evidence" in report["passes"][0]["error"]
     assert plan == film()
+
+
+def numbered_evidence(monkeypatch):
+    renders = []
+
+    def evidence(folder, plan, jobs, scenes):
+        renders.append(plan.concept)
+        return [f"render-{len(renders) - 1}"]
+
+    monkeypatch.setattr(director, "review_evidence", evidence)
+    return renders
+
+
+def test_revision_after_a_regression_sees_the_best_films_frames(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+    numbered_evidence(monkeypatch)
+    revised = film().model_dump()
+    revised["concept"] = "A revised concept that follows the same product action."
+    first = review(canvas=6) | {"canvas": axis(6, FIX)}
+    worse = review(canvas=6, typography=7) | {
+        "canvas": axis(6, FIX),
+        "typography": axis(7, FIX),
+    }
+    answers = iter([first, revised, worse, revised, worse])
+    revisions = []
+
+    def reasoner(prompt, images, **k):
+        if not prompt.startswith("Score these"):
+            revisions.append((prompt, images))
+        return next(answers)
+
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
+    director.review_film(film(), sources(), tmp_path, "paper", 30, reasoner=reasoner)
+    assert [images for _, images in revisions] == [["render-0"], ["render-0"]]
+    assert "Prior revision rejections: []" in revisions[0][0]
+    assert 'Prior revision rejections: [["Regressed typography"]]' in revisions[1][0]
+
+
+def test_validator_rejected_revision_retries_without_rerendering(tmp_path, monkeypatch):
+    calls = fake_previews(monkeypatch)
+    renders = numbered_evidence(monkeypatch)
+    revised = film().model_dump()
+    revised["concept"] = "A revised concept that follows the same product action."
+    first = review(canvas=6) | {"canvas": axis(6, FIX)}
+    answers = iter([first, revised, revised, review()])
+    checks = iter([["Shot 0 holds too long."], []])
+    monkeypatch.setattr(director, "validate_evidence", lambda *a: next(checks))
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
+    prompts = []
+
+    def reasoner(prompt, *a, **k):
+        prompts.append(prompt)
+        return next(answers)
+
+    plan, report = director.review_film(
+        film(), sources(), tmp_path, "paper", 30, reasoner=reasoner
+    )
+    assert len(calls) == 2 and len(renders) == 2  # the unchanged best plan is not re-rendered
+    assert "Shot 0 holds too long." in prompts[2]
+    assert report["passes"][0]["rejected_revision"] == ["Shot 0 holds too long."]
+    assert report["revision_count"] == 1 and report["status"] == "passed"
+    assert plan.concept == revised["concept"]
+
+
+def test_rejected_revisions_count_against_the_pass_budget(tmp_path, monkeypatch):
+    calls = fake_previews(monkeypatch)
+    revised = film().model_dump()
+    first = review(canvas=6) | {"canvas": axis(6, FIX)}
+    answers = iter([first, revised, revised, revised])
+    monkeypatch.setattr(director, "validate_evidence", lambda *a: ["Shot 0 holds too long."])
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
+    _, report = director.review_film(
+        film(), sources(), tmp_path, "paper", 30, reasoner=lambda *a, **k: next(answers)
+    )
+    assert len(calls) == 1
+    assert report["passes"][0]["rejected_revision"] == ["Shot 0 holds too long."] * 2
+    assert report["status"] == "needs_review"

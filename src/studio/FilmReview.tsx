@@ -16,10 +16,8 @@ const STATUS = {
 };
 
 export function FilmReview({ report }: { report: FilmReviewReport }) {
-  // The last scored pass that was not a rejected revision describes the film that shipped.
-  const last = [...report.passes].reverse().find((p) => p.review && !p.rejected_revision?.length);
-  const review = last?.review;
-  const scores = last?.scores;
+  const review = report.final?.review;
+  const scores = report.final?.scores;
   const findings: ReviewFinding[] = review
     ? [...(review.blocking ?? []), ...AXES.flatMap((axis) => review[axis]?.findings ?? [])]
     : [];
@@ -34,12 +32,14 @@ export function FilmReview({ report }: { report: FilmReviewReport }) {
       {scores && (
         <ul className="film-review-scores">
           {AXES.map((axis) => {
-            const score = scores[axis] ?? 0;
+            const score: number | undefined = scores[axis];
             return (
-              <li key={axis} className={score >= 8 ? 'ok' : 'low'}>
+              <li key={axis} className={typeof score === 'number' && score >= 8 ? 'ok' : 'low'}>
                 <span>{LABELS[axis]}</span>
-                <meter min={1} max={10} low={7.9} optimum={10} value={score} />
-                <b>{scores[axis] ?? '–'}</b>
+                {typeof score === 'number' && (
+                  <meter min={1} max={10} low={7.9} optimum={10} value={score} />
+                )}
+                <b>{score ?? '–'}</b>
               </li>
             );
           })}

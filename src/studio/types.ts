@@ -71,6 +71,7 @@ export type FilmReviewPass = {
 export type FilmReviewReport = {
   status: 'passed' | 'needs_review' | 'unavailable';
   rubric?: string;
+  final?: { attempt: number; scores: Record<Axis, number>; review: FilmReviewPass['review'] };
   passes: FilmReviewPass[];
   revision_count: number;
 };

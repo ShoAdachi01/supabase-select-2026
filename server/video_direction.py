@@ -1000,6 +1000,11 @@ def review_film(
             if candidate is not None:
                 report["revision_count"] += 1
             best_plan, best_review = plan, review
+            report["final"] = {
+                "attempt": attempt,
+                "scores": review.scores(),
+                "review": review.model_dump(),
+            }
         candidate = None
         if gate(best_review) == "passed" or attempt == passes:
             break

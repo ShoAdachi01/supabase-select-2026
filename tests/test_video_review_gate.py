@@ -201,3 +201,49 @@ def test_regression_rejection_survives_a_later_invalid_revision(tmp_path, monkey
     saved = json.loads((tmp_path / "director-review.json").read_text())
     assert saved["passes"][1]["rejected_revision"][0] == "Regressed typography"
     assert "Regressed typography" in prompts[3]
+
+
+def test_final_points_at_first_review_when_revision_provider_fails(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+    first = review(canvas=6) | {"canvas": axis(6, FIX)}
+    answers = iter([first])
+
+    def reasoner(prompt, *a, **k):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise director.ProviderError("revision failed") from None
+
+    _, report = director.review_film(film(), sources(), tmp_path, "paper", 30, reasoner=reasoner)
+    assert report["final"]["attempt"] == 0
+    assert report["final"]["scores"] == report["passes"][0]["scores"]
+    assert report["final"]["review"]["canvas"]["score"] == 6
+    assert report["passes"][0]["rejected_revision"] == ["revision failed"]
+
+
+def test_final_stays_on_best_attempt_after_regression(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+    revised = film().model_dump()
+    revised["concept"] = "A revised concept that follows the same product action."
+    first = review(canvas=6) | {"canvas": axis(6, FIX)}
+    worse = review(canvas=6, typography=7) | {
+        "canvas": axis(6, FIX),
+        "typography": axis(7, FIX),
+    }
+    answers = iter([first, revised, worse, revised, worse])
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
+    _, report = director.review_film(
+        film(), sources(), tmp_path, "paper", 30, reasoner=lambda *a, **k: next(answers)
+    )
+    assert report["final"]["attempt"] == 0
+    assert report["final"]["scores"] == report["passes"][0]["scores"]
+    assert report["passes"][1]["rejected_revision"] == ["Regressed typography"]
+
+
+def test_unavailable_review_has_no_final(tmp_path, monkeypatch):
+    fake_previews(monkeypatch)
+    _, report = director.review_film(
+        film(), sources(), tmp_path, "paper", 30, reasoner=lambda *a, **k: {"bad": 1}
+    )
+    assert report["status"] == "unavailable"
+    assert "final" not in report

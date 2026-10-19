@@ -24,7 +24,7 @@
 - Critic: 7 axes (`readability`, `canvas`, `motion`, `pacing`, `typography`, `continuity`, `specificity`), scores 1–10, ≥ 1 observation per axis, actionable finding(s) for any axis < 8. Pass = all axes ≥ 8 and no blocking findings. Revision budget `CUTROOM_REVIEW_PASSES` (default 2). A revision is rejected if any axis drops by ≥ 2.
 - Below-bar films still export (`needs_review`). `reviewed` is renamed `passed`.
 - Commands: `.venv/bin/pytest -q`, `npm run lint`, `npm run build`, `npm test`. Format Python with `.venv/bin/ruff format`.
-- Commit subjects are concise and imperative. Every commit ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Commit messages are concise and imperative, with no AI attribution or co-author trailers (see INSTRUCTIONS.md).
 
 ## File Structure
 
@@ -64,9 +64,7 @@ Expected: `120 passed`, `All checks passed!`, Prettier clean.
 
 ```bash
 git add server/video_providers.py tests/test_video_prompts.py
-git commit -m "Retry truncated Claude plans and surface provider error messages
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "Retry truncated Claude plans and surface provider error messages"
 ```
 
 ---

@@ -27,6 +27,8 @@ from server.video_camera import (
 from server.video_composition import preview_frame_list
 from server.video_direction_models import (
     AXES,
+    AXIS_FLOOR,
+    MEAN_BAR,
     FilmDirection,
     FilmReview,
     FilmTreatment,
@@ -921,9 +923,12 @@ def review_evidence(
 
 
 def gate(review: FilmReview) -> Literal["passed", "needs_review"]:
-    """Pass only when every axis is at least 8 and no finding, top-level or nested, is blocking."""
+    """Pass only when every axis meets AXIS_FLOOR, the mean meets MEAN_BAR and no finding,
+    top-level or nested, is blocking."""
+    scores = list(review.scores().values())
     nested = any(f.blocking for a in AXES for f in getattr(review, a).findings)
-    if min(review.scores().values()) >= 8 and not review.blocking and not nested:
+    met = min(scores) >= AXIS_FLOOR and sum(scores) / len(scores) >= MEAN_BAR
+    if met and not review.blocking and not nested:
         return "passed"
     return "needs_review"
 
@@ -932,17 +937,18 @@ def regressed(before: FilmReview, after: FilmReview) -> list[str]:
     return [a for a in AXES if before.scores()[a] - after.scores()[a] >= 2]
 
 
-CRITIC = """Score these actual rendered frames of a product launch film on seven axes, 1-10.
-Anchors (5 = acceptable draft, 8 = launch-ready):
+CRITIC = f"""Score these actual rendered frames of a product launch film on seven axes, 1-10.
+Anchors (5 = acceptable draft, 8 = professional launch quality).
+A film passes with every axis >= {AXIS_FLOOR} and a mean >= {MEAN_BAR}; a professional launch film scores about 7-9 per axis.
 - readability: 5 = key UI legible only on pause; 8 = the clicked control and its result read at 1080p.
 - canvas: 5 = large unused areas or thin bands; 8 = the dominant object fills its frame by intent.
 - motion: 5 = moves happen but do not lead the eye; 8 = every move guides attention to a real detail.
 - pacing: 5 = holds outlast their reading; 8 = contrast of density and speed, ending lands.
-- typography: 5 = readable but timid or awkward breaks; 8 = clear hierarchy, no orphans or clipping.
+- typography: 5 = readable but timid: low size contrast between headline and support, centered by default, awkward breaks or widows; 8 = deliberate hierarchy: at least 2x size contrast, line breaks on meaning, alignment tied to a product edge or grid, no orphans or clipping, type entrances timed to the beat.
 - continuity: 5 = cuts register as jumps; 8 = matches and scale changes feel intentional.
 - specificity: 5 = could be any SaaS; 8 = concept and copy belong to this product only.
 For EVERY axis give 1-4 observations (shot, time, what is visible). Observations may be positive.
-For any axis below 8 give actionable findings (problem plus the intended change).
+For any axis below {AXIS_FLOOR} give actionable findings (problem plus the intended change).
 List blocking defects separately: clipped_text (settled text cropped), hidden_click (recorded
 action outside the frame or covered), unreadable_type (added text illegible). Do not invent
 criticism of strong work; a score of 8-10 needs observations, not defects.

@@ -335,9 +335,7 @@ def test_validator_rejected_revision_retries_without_rerendering(tmp_path, monke
         prompts.append(prompt)
         return next(answers)
 
-    plan, report = director.review_film(
-        film(), sources(), tmp_path, "paper", 30, reasoner=reasoner
-    )
+    plan, report = director.review_film(film(), sources(), tmp_path, "paper", 30, reasoner=reasoner)
     assert len(calls) == 2 and len(renders) == 2  # the unchanged best plan is not re-rendered
     assert "Shot 0 holds too long." in prompts[2]
     assert report["passes"][0]["rejected_revision"] == ["Shot 0 holds too long."]
@@ -393,3 +391,67 @@ def test_critic_and_revision_usage_is_recorded_on_each_pass(tmp_path, monkeypatc
     assert set(revision) == keys and revision["usage"] == {"output_tokens": 4000}
     assert "revision_usage" not in report["passes"][1]
     assert "secret prompt text" not in (tmp_path / "director-review.json").read_text()
+
+
+def scored(**scores):
+    """A review whose axes below the floor carry an actionable finding."""
+    data = review(**scores)
+    for a, s in scores.items():
+        data[a] = axis(s, FIX if s < 7 else None)
+    return data
+
+
+def test_bar_constants_are_shared_by_model_and_gate():
+    from server import video_direction_models as models
+
+    assert models.AXIS_FLOOR == 7 and models.MEAN_BAR == 7.5
+    assert director.AXIS_FLOOR is models.AXIS_FLOOR and director.MEAN_BAR is models.MEAN_BAR
+
+
+def test_all_axes_at_floor_with_mean_below_bar_needs_review():
+    data = scored(**{a: 7 for a in AXES})
+    assert director.gate(FilmReview.model_validate(data)) == "needs_review"
+
+
+def test_professional_control_scores_pass():
+    notion = dict(zip(AXES, (7, 7, 8, 7, 8, 9, 9), strict=True))
+    assert director.gate(FilmReview.model_validate(scored(**notion))) == "passed"
+
+
+def test_one_axis_below_floor_fails_despite_high_mean():
+    data = scored(canvas=6, readability=10, motion=10, pacing=10)
+    assert sum(FilmReview.model_validate(data).scores().values()) / 7 >= 7.5
+    assert director.gate(FilmReview.model_validate(data)) == "needs_review"
+
+
+def test_evidence_rule_follows_the_floor():
+    data = review()
+    data["motion"] = axis(6)
+    with pytest.raises(ValidationError):
+        FilmReview.model_validate(data)
+    data["motion"] = axis(7)
+    FilmReview.model_validate(data)
+
+
+def test_blocking_finding_fails_the_professional_control_too():
+    notion = scored(**dict(zip(AXES, (7, 7, 8, 7, 8, 9, 9), strict=True)))
+    notion["blocking"] = [FIX[0] | {"blocking": "unreadable_type"}]
+    assert director.gate(FilmReview.model_validate(notion)) == "needs_review"
+
+
+def test_critic_prompt_has_checkable_typography_criteria_and_states_the_bar():
+    for phrase in (
+        "low size contrast between headline and support",
+        "centered by default",
+        "widows",
+        "2x size contrast",
+        "line breaks on meaning",
+        "alignment tied to a product edge or grid",
+        "no orphans or clipping",
+        "type entrances timed to the beat",
+        "every axis >= 7 and a mean >= 7.5",
+        "For any axis below 7 give actionable findings",
+        "Do not invent\ncriticism of strong work",
+        "- canvas: 5 = large unused areas or thin bands; 8 = the dominant object fills its frame by intent.",
+    ):
+        assert phrase in director.CRITIC

@@ -164,6 +164,10 @@ class FilmTreatment(Contract):
         return self
 
 
+# Calibrated against a professional launch film (frames-only, 3 runs): it scored 7-9 per
+# axis with a mean near 7.8. The studio mirrors these in src/studio/FilmReview.tsx.
+AXIS_FLOOR = 7
+MEAN_BAR = 7.5
 AXES = ("readability", "canvas", "motion", "pacing", "typography", "continuity", "specificity")
 
 
@@ -188,8 +192,8 @@ class AxisScore(Contract):
 
     @model_validator(mode="after")
     def failing_needs_action(self):
-        if self.score < 8 and not self.findings:
-            raise ValueError("An axis below 8 needs an actionable finding.")
+        if self.score < AXIS_FLOOR and not self.findings:
+            raise ValueError(f"An axis below {AXIS_FLOOR} needs an actionable finding.")
         return self
 
 

@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { accessToken, api, initialize } from '../api';
 import type { Features, Playback, TimelineClip, Video, Voice } from './types';
+import { FilmReview } from './FilmReview';
 import TimelineEditor, { initialClips, newTitle } from './TimelineEditor';
 
 const DEMO_BRIEF =
@@ -1080,6 +1081,9 @@ export default function Studio() {
                     </div>
                   )}
                 </div>
+                {job.payload.direction?.review && (
+                  <FilmReview report={job.payload.direction.review} />
+                )}
                 <div className="player-meta">
                   <span>
                     <span
@@ -1254,10 +1258,12 @@ export default function Studio() {
                         ))}
                       </select>
                     </label>
-                    <button className="text-button" onClick={() => previewVoice(voice)}>
-                      <Play size={11} />
-                      Hear this voice
-                    </button>
+                    {voice !== 'none' && (
+                      <button className="text-button" onClick={() => previewVoice(voice)}>
+                        <Play size={11} />
+                        Hear this voice
+                      </button>
+                    )}
                     <label>
                       Background music
                       <select
@@ -1506,18 +1512,20 @@ export default function Studio() {
                   </span>
                   <h3>{v.name}</h3>
                   <p>{v.description}</p>
-                  <button
-                    className="voice-preview"
-                    disabled={previewing === v.id}
-                    onClick={() => previewVoice(v.id)}
-                  >
-                    {previewing === v.id ? (
-                      <LoaderCircle size={13} className="spin" />
-                    ) : (
-                      <Play size={11} fill="currentColor" />
-                    )}
-                    Listen to a sample
-                  </button>
+                  {v.id !== 'none' && (
+                    <button
+                      className="voice-preview"
+                      disabled={previewing === v.id}
+                      onClick={() => previewVoice(v.id)}
+                    >
+                      {previewing === v.id ? (
+                        <LoaderCircle size={13} className="spin" />
+                      ) : (
+                        <Play size={11} fill="currentColor" />
+                      )}
+                      Listen to a sample
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

@@ -30,13 +30,29 @@ def capabilities() -> dict:
     }
 
 
-def checked(response: httpx.Response, provider: str) -> httpx.Response:
+def provider_message(response: httpx.Response) -> str:
+    """Only the structured error message from a reasoning API, without configured secrets."""
+    try:
+        message = response.json().get("error", {}).get("message")
+    except (ValueError, AttributeError):
+        return ""
+    if not isinstance(message, str):
+        return ""
+    for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_WORKSPACE_ID"):
+        if secret := setting(name):
+            message = message.replace(secret, "[redacted]")
+    return " ".join(message.split())[:300]
+
+
+def checked(response: httpx.Response, provider: str, *, explain: bool = False) -> httpx.Response:
     if response.status_code >= 400:
         # Do not return provider bodies: these can echo submitted credentials or audio.
+        # Reasoning endpoints may opt in to their structured error message only.
         detail = (
             "The provider is temporarily unavailable. Retry shortly."
             if response.status_code >= 500
-            else "Check API access, rate limits, and credits."
+            else (explain and provider_message(response))
+            or "Check API access, rate limits, and credits."
         )
         raise ProviderError(f"{provider} returned {response.status_code}. {detail}")
     return response
@@ -62,7 +78,7 @@ def reasoning_request(url: str, *, motion: bool, **kwargs) -> httpx.Response:
 
 def reason(
     prompt: str,
-    screenshot: str | None = None,
+    screenshot: str | list[str] | None = None,
     *,
     max_tokens: int = 1800,
     motion: bool = False,
@@ -89,7 +105,7 @@ def reason(
         )
     )
     selected_model = model or (
-        setting("ANTHROPIC_MOTION_MODEL", setting("ANTHROPIC_MODEL", "claude-sonnet-4-5"))
+        setting("ANTHROPIC_MOTION_MODEL", "claude-opus-5-5")
         if use_claude and motion
         else setting("ANTHROPIC_MODEL", "claude-sonnet-4-5")
         if use_claude
@@ -100,62 +116,77 @@ def reason(
     selected_effort = effort or setting("CUTROOM_MOTION_EFFORT", "high")
     if selected_effort not in ("low", "medium", "high"):
         raise ValueError("Motion effort must be low, medium, or high")
+    # An empty screenshot means "no image", as it did before multi-image support.
+    images = [s for s in ([screenshot] if isinstance(screenshot, str) else screenshot or []) if s]
     started = time.monotonic()
     if use_claude:
         if not setting("ANTHROPIC_API_KEY"):
             raise ProviderError("Configure ANTHROPIC_API_KEY for the selected director.")
         content = [{"type": "text", "text": prompt}]
-        if screenshot:
+        for image in images:
             content.append(
                 {
                     "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": screenshot,
-                    },
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": image},
                 }
             )
-        response = checked(
-            reasoning_request(
-                "https://api.anthropic.com/v1/messages",
-                motion=motion,
-                headers={
-                    "x-api-key": setting("ANTHROPIC_API_KEY"),
-                    "anthropic-version": "2023-06-01",
-                    **(
-                        {"anthropic-workspace-id": setting("ANTHROPIC_WORKSPACE_ID")}
-                        if setting("ANTHROPIC_WORKSPACE_ID")
-                        else {}
-                    ),
-                },
-                json={
-                    "model": selected_model,
-                    "max_tokens": max_tokens + (8000 if motion else 0),
-                    **(
-                        {"output_config": {"effort": selected_effort}}
-                        if motion
-                        and selected_model.startswith(
-                            ("claude-opus-5", "claude-fable-5", "claude-sonnet-5")
-                        )
-                        else {}
-                    ),
-                    "system": system,
-                    "messages": [{"role": "user", "content": content}],
-                },
-                timeout=240 if motion else 90,
+        request_body = {
+            "model": selected_model,
+            "max_tokens": max_tokens + (8000 if motion else 0),
+            **(
+                {"output_config": {"effort": selected_effort}}
+                if motion
+                and selected_model.startswith(
+                    ("claude-opus-5", "claude-fable-5", "claude-sonnet-5")
+                )
+                else {}
             ),
-            "Claude",
-        )
-        result = "".join(b.get("text", "") for b in response.json().get("content", []))
+            "system": system,
+            "messages": [{"role": "user", "content": content}],
+        }
+        budget_attempts = []
+        for budget_attempt in range(2 if motion else 1):
+            response = checked(
+                reasoning_request(
+                    "https://api.anthropic.com/v1/messages",
+                    motion=motion,
+                    headers={
+                        "x-api-key": setting("ANTHROPIC_API_KEY"),
+                        "anthropic-version": "2023-06-01",
+                        **(
+                            {"anthropic-workspace-id": setting("ANTHROPIC_WORKSPACE_ID")}
+                            if setting("ANTHROPIC_WORKSPACE_ID")
+                            else {}
+                        ),
+                    },
+                    json=request_body,
+                    timeout=240 if motion else 90,
+                ),
+                "Claude",
+                explain=True,
+            )
+            response_data = response.json()
+            budget_attempts.append(response_data.get("usage", {}))
+            if telemetry is not None:
+                telemetry.update(usage_attempts=list(budget_attempts))
+            # Thinking shares the output budget; a truncated plan must never reach json.loads.
+            if response_data.get("stop_reason") != "max_tokens" or not motion:
+                break
+            if budget_attempt == 1:
+                raise ProviderError(
+                    "The director response was incomplete. No partial film plan was accepted."
+                )
+            request_body = {
+                **request_body,
+                "max_tokens": min(32000, request_body["max_tokens"] * 2),
+            }
+        result = "".join(b.get("text", "") for b in response_data.get("content", []))
     else:
         if not setting("OPENAI_API_KEY"):
             raise ValueError("Configure OPENAI_API_KEY or ANTHROPIC_API_KEY to direct a real app.")
         content = [{"type": "input_text", "text": "Return a JSON object.\n" + prompt}]
-        if screenshot:
-            content.append(
-                {"type": "input_image", "image_url": f"data:image/jpeg;base64,{screenshot}"}
-            )
+        for image in images:
+            content.append({"type": "input_image", "image_url": f"data:image/jpeg;base64,{image}"})
         request_body = {
             "model": selected_model,
             **(
@@ -180,6 +211,7 @@ def reason(
                     timeout=240 if motion else 90,
                 ),
                 "OpenAI",
+                explain=True,
             )
             response_data = response.json()
             budget_attempts.append(response_data.get("usage", {}))
@@ -219,12 +251,19 @@ def reason(
             effort=selected_effort if motion else None,
             seconds=round(time.monotonic() - started, 2),
             usage=response.json().get("usage", {}),
-            usage_attempts=[response.json().get("usage", {})] if use_claude else budget_attempts,
+            usage_attempts=budget_attempts,
         )
-    result = result.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    value = json.loads(result)
+    invalid = ValueError("The director returned an invalid scene plan. Try a more specific brief.")
+    # Models sometimes wrap the object in prose or fences, or add text after it.
+    start = result.find("{")
+    if start < 0:
+        raise invalid
+    try:
+        value, _ = json.JSONDecoder().raw_decode(result, start)
+    except json.JSONDecodeError:
+        raise invalid from None
     if not isinstance(value, dict):
-        raise ValueError("The director returned an invalid scene plan. Try a more specific brief.")
+        raise invalid
     return value
 
 

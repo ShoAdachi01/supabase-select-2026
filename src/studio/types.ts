@@ -38,6 +38,44 @@ export type AnimationAsset = {
   thumbnail_url?: string;
   url?: string;
 };
+export const AXES = [
+  'readability',
+  'canvas',
+  'motion',
+  'pacing',
+  'typography',
+  'continuity',
+  'specificity',
+] as const;
+export type Axis = (typeof AXES)[number];
+export type ReviewObservation = { shot: number; time: number; note: string };
+export type ReviewFinding = {
+  shot: number;
+  time: number;
+  problem: string;
+  change: string;
+  blocking?: 'clipped_text' | 'hidden_click' | 'unreadable_type' | null;
+};
+export type AxisReview = {
+  score: number;
+  observations: ReviewObservation[];
+  findings: ReviewFinding[];
+};
+export type FilmReviewPass = {
+  attempt: number;
+  scores?: Record<Axis, number>;
+  review?: Record<Axis, AxisReview> & { blocking?: ReviewFinding[] };
+  rejected_revision?: string[];
+  error?: string;
+};
+export type FilmReviewReport = {
+  // 'reviewed' is the pre-rubric status that older stored films still carry.
+  status: 'passed' | 'needs_review' | 'unavailable' | 'reviewed';
+  rubric?: string;
+  final?: { attempt: number; scores: Record<Axis, number>; review: FilmReviewPass['review'] };
+  passes: FilmReviewPass[];
+  revision_count: number;
+};
 export type Video = {
   id: string;
   title: string;
@@ -49,6 +87,7 @@ export type Video = {
     brief: string;
     creative_direction?: string;
     reference_urls?: string[];
+    direction?: { concept: string; review?: FilmReviewReport };
     voice: string;
     music: 'ambient' | 'momentum' | 'none';
     theme: 'midnight' | 'paper';

@@ -18,7 +18,7 @@ from fastapi import HTTPException
 from server.network import public_target
 from server.store import LOCAL_DEMO, Store
 from server.video_alignment import align_result_shots
-from server.video_capture import encode_directed_capture
+from server.video_capture import encode_directed_capture, measure_sources
 from server.video_models import (
     STOCK_VOICES,
     GenerateClipInput,
@@ -329,12 +329,14 @@ def film(store: Store, job: dict, body: VideoInput):
             scenes = completed["scenes"]
             if completed.get("directed"):
                 encode_directed_capture(folder)
+                measure_sources(folder, scenes)
             else:
                 raw = Path(completed["video"]).resolve()
                 if raw.parent != folder:
                     raise ValueError("Invalid browser artifact.")
                 (folder / "raw.webm").write_bytes(raw.read_bytes())
                 align_result_shots(folder / "raw.webm", folder, scenes)
+                measure_sources(folder, scenes)
             job["payload"]["scenes"] = [{**scene, "narration": ""} for scene in scenes]
             event(
                 store,

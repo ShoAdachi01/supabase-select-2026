@@ -98,7 +98,7 @@ def test_director_can_choose_structure_without_inserting_opening_or_closing_card
         (lambda p: setattr(p.shots[1].layers[0].states[0], "x", 0.1), "match-cut geometry"),
         (lambda p: setattr(p.shots[1].layers[0], "kind", "detail-0"), "was not captured"),
         (lambda p: setattr(p.shots[1], "bpm", 150), "one BPM"),
-        (lambda p: setattr(p.shots[0].layers[0].states[0], "opacity", 0), "fully opaque"),
+        (lambda p: setattr(p.shots[0].layers[0].states[1], "opacity", 0.6), "may only fade"),
     ],
 )
 def test_invalid_evidence_and_continuity_are_rejected(mutation, expected):
@@ -164,7 +164,7 @@ def test_director_repairs_invalid_plan_and_receives_screens(tmp_path, monkeypatc
         "Product", "Show both features", sources(), tmp_path, strategy="baseline"
     )
     assert result == film()
-    assert calls[0][1].startswith("/9j/")
+    assert isinstance(calls[0][1], list) and calls[0][1][0].startswith("/9j/")
     assert "unknown capture" in calls[1][0]
     assert (tmp_path / "beat-grid.json").exists()
     assert json.loads((tmp_path / "beat-grid.json").read_text())[1]["start_frame"] == 90
@@ -179,21 +179,26 @@ def test_review_uses_rendered_frames_and_is_bounded(tmp_path, monkeypatch):
         jobs = [{"index": i, "frames": 90} for i in range(2)]
         (folder / "motion-jobs.json").write_text(json.dumps({"jobs": jobs}))
         for job in jobs:
-            for frame in (0, 18, 45, 71, 89):
+            for frame in director.preview_frame_list(90):
                 Image.new("RGB", (960, 540), "blue").save(
                     folder / f"preview-{job['index']}-{frame}.jpg"
                 )
 
     monkeypatch.setattr(video_composition, "prepare_compositions", preview)
-    answers = iter(
-        [
-            {"findings": [{"shot": 0, "time": 1, "problem": "Title needs room"}]},
-            film().model_dump(),
-            {"findings": [{"shot": 0, "time": 1, "problem": "Title needs room"}]},
-            film().model_dump(),
-            {"findings": [{"shot": 0, "time": 1, "problem": "Title needs room"}]},
-        ]
-    )
+    from server.video_direction_models import AXES
+
+    def axis(score):
+        return {
+            "score": score,
+            "observations": [{"shot": 0, "time": 1, "note": "The title sits on the product."}],
+            "findings": []
+            if score >= 8
+            else [{"shot": 0, "time": 1, "problem": "Title needs room", "change": "Move it up."}],
+        }
+
+    failing = {a: axis(6 if a == "canvas" else 9) for a in AXES} | {"blocking": []}
+    answers = iter([failing, film().model_dump(), failing, film().model_dump(), failing])
+    monkeypatch.setenv("CUTROOM_REVIEW_PASSES", "2")
     monkeypatch.setattr(director, "reason", lambda *args, **kwargs: next(answers))
     _, report = director.review_film(film(), sources(), tmp_path, "paper", 30)
     assert len(calls) == 3
@@ -201,7 +206,7 @@ def test_review_uses_rendered_frames_and_is_bounded(tmp_path, monkeypatch):
     assert (
         report["status"] == "needs_review"
     )  # Never claim that self-evaluation guarantees quality.
-    assert (tmp_path / "director-review-2.jpg").exists()
+    assert (tmp_path / "review-shot-0-0.jpg").exists()
 
 
 def test_evidence_paths_do_not_escape_private_job(tmp_path):
@@ -292,12 +297,14 @@ def test_browser_director_repairs_unsupported_actions_before_execution(monkeypat
     assert action == {"type": "click", "id": 7}
 
 
-def test_live_geometry_is_constrained_without_replacing_the_composition():
+def test_live_geometry_keeps_the_directors_size_and_clamps_only_the_camera():
     plan = film()
     plan.shots[0].layers[0].states[0].w = 0.5
-    fitted = director.constrain_geometry(plan)
-    assert fitted.shots[0].layers[0].states[0].w == 0.65
-    assert plan.shots[0].layers[0].states[0].w == 0.5
+    plan.shots[0].layers[0].states[0].cam_zoom = 2
+    fitted = director.constrain_geometry(plan, sources())
+    assert fitted.shots[0].layers[0].states[0].w == 0.5
+    assert fitted.shots[0].layers[0].states[0].cam_zoom == 1.2  # 1x capture cap
+    assert plan.shots[0].layers[0].states[0].cam_zoom == 2
     assert fitted.shots[0].composition == plan.shots[0].composition
 
 
@@ -359,3 +366,277 @@ def test_switching_off_directed_motion_also_disables_its_graphic_audio():
     assert motion_schedule(clips) == []
     assert len(interaction_schedule(clips)) == 2
     assert beat_map(clips, 6)["bpm"] == 150
+
+
+def with_footage_state(**state):
+    data = film().model_dump()
+    for shot in data["shots"]:
+        shot["layers"][0]["states"] = [
+            {**dict(beat=0, x=0, y=0, w=1, h=1), **state},
+            dict(beat=6, **state),
+        ]
+    return FilmDirection.model_validate(data)
+
+
+def scaled(scale=2, x=480, y=270):
+    out = sources()
+    for s in out:
+        s.update(viewport={"width": 1920, "height": 1080}, source_scale=scale, still_scale=2)
+        s["interactions"][0].update(x=x, y=y)
+    return out
+
+
+def test_small_footage_fails_readability_unless_pushed_in():
+    scenes = scaled()
+    small = with_footage_state(x=0.25, y=0.25, w=0.5, h=0.5)
+    issues = director.validate_evidence(director.constrain_geometry(small, scenes), scenes, 30)
+    assert any("readable" in i for i in issues)
+    pushed = with_footage_state(x=0.25, y=0.25, w=0.5, h=0.5, cam_zoom=1.5, focus="click-0")
+    assert not any(
+        "readable" in i
+        for i in director.validate_evidence(director.constrain_geometry(pushed, scenes), scenes, 30)
+    )
+
+
+def test_push_in_that_crops_out_the_click_is_rejected():
+    scenes = scaled(x=1800, y=1000)
+    plan = with_footage_state(cam_zoom=2, cam_x=0.1, cam_y=0.1)
+    issues = director.validate_evidence(director.constrain_geometry(plan, scenes), scenes, 30)
+    assert any("click-0" in i and "frame" in i for i in issues)
+
+
+def test_reading_hold_is_allowed_without_drift_but_dead_air_is_not():
+    data = film().model_dump()
+    graphic = dict(
+        source="scene-0.jpg",
+        label="Line",
+        purpose="State the promise in type.",
+        composition="type",
+        bpm=120,
+        beats=8,
+        layers=[
+            dict(
+                id="t",
+                kind="text",
+                text="Edit every word",
+                entrance="words",
+                states=[
+                    dict(beat=0, x=0.1, y=0.3, w=0.8, h=0.3, opacity=0),
+                    dict(beat=0.5, opacity=1),
+                ],
+            ),
+        ],
+    )
+    data["shots"].insert(1, {**graphic, "beats": 4})
+    plan = FilmDirection.model_validate(data)
+    ((start, end),) = director.static_spans(plan.shots[1])
+    assert director.hold_budget(plan.shots[1], start) == pytest.approx(1.5)  # 3 words
+    issues = director.validate_evidence(plan, sources(), 30)
+    assert not any("holds static" in i for i in issues)  # 0.95s reading hold, no drift needed
+    data["shots"][1]["beats"] = 8
+    issues = director.validate_evidence(FilmDirection.model_validate(data), sources(), 30)
+    assert any("holds static" in i for i in issues)  # 2.95s of the same line
+
+
+def shape_plan(**layer):
+    data = film().model_dump()
+    data["shots"][0]["layers"].append(
+        dict(id="ring", kind="shape", states=[dict(beat=0, x=0.4, y=0.4, w=0.1, h=0.1)], **layer)
+    )
+    return FilmDirection.model_validate(data)
+
+
+def test_shape_target_layer_must_name_another_layer_in_the_shot():
+    from server.video_direction_models import MotionLayer
+
+    for bad in ("../x", "a b", "x" * 41):
+        with pytest.raises(ValidationError):
+            MotionLayer.model_validate(
+                dict(id="r", kind="shape", target_layer=bad, states=[dict(beat=0)])
+            )
+    issues = director.validate_evidence(shape_plan(target_layer="ghost"), sources(), 30)
+    assert any("target_layer" in i and "ghost" in i for i in issues)
+    ok = director.validate_evidence(shape_plan(target_layer="product"), sources(), 30)
+    assert not any("target_layer" in i for i in ok)
+
+
+def test_shape_target_requires_target_layer():
+    issues = director.validate_evidence(shape_plan(target="click-0"), sources(), 30)
+    assert any("target" in i and "target_layer" in i for i in issues)
+
+
+def test_director_rejects_model_supplied_target_coordinates(tmp_path, monkeypatch):
+    for scene in sources():
+        Image.new("RGB", (320, 180), "blue").save(tmp_path / scene["thumbnail"])
+    invalid = film().model_dump()
+    invalid["shots"][0]["layers"][0]["target_x"] = 0.5
+    answers = iter([invalid, film().model_dump()])
+    calls = []
+    monkeypatch.setattr(
+        director, "reason", lambda *args, **kwargs: calls.append(args) or next(answers)
+    )
+    result = director.direct_film(
+        "Product", "Show both features", sources(), tmp_path, strategy="baseline"
+    )
+    assert result == film()
+    assert "target_x/target_y are set by Cutroom; use target" in calls[1][0]
+
+
+def test_review_evidence_samples_every_half_second_and_crops_settled_type(tmp_path):
+    assert director.preview_frame_list(61) == [0, 15, 30, 45, 60]
+    plan = film()
+    plan.shots[0].layers.append(
+        plan.shots[0]
+        .layers[0]
+        .model_copy(update={"id": "t", "kind": "text", "text": "Still yours"})
+    )
+    jobs = [{"index": 0, "frames": 61}, {"index": 1, "frames": 61}]
+    for job in jobs:
+        for f in director.preview_frame_list(job["frames"]):
+            Image.new("RGB", (1920, 1080), "white").save(
+                tmp_path / f"preview-{job['index']}-{f}.jpg"
+            )
+    images = director.review_evidence(tmp_path, plan, jobs, sources())
+    assert len(images) >= 3
+    assert (tmp_path / "review-shot-0-0.jpg").exists()
+    with Image.open(tmp_path / "review-type-0.jpg") as sheet:
+        assert max(sheet.size) <= 1568
+
+
+def test_review_sheets_stay_within_critic_image_size(tmp_path):
+    plan = film()
+    layer = plan.shots[0].layers[0].model_copy(update={"id": "wide", "kind": "text", "text": "x"})
+    layer.states[-1] = layer.states[-1].model_copy(update={"x": 0, "y": 0.1, "w": 1, "h": 0.3})
+    plan.shots[0].layers.append(layer)
+    jobs = [{"index": 0, "frames": 450}]
+    for f in director.preview_frame_list(450):
+        Image.new("RGB", (1920, 1080), "white").save(tmp_path / f"preview-0-{f}.jpg")
+    images = director.review_evidence(tmp_path, plan, jobs, sources())
+    assert 0 < len(images) <= 60
+    sheets = sorted(tmp_path.glob("review-shot-0-*.jpg"))
+    assert len(sheets) == 8  # 31 frames, four per sheet
+    for path in [*sheets, *tmp_path.glob("review-type-*.jpg")]:
+        with Image.open(path) as sheet:
+            assert max(sheet.size) <= 1568
+    with Image.open(tmp_path / "review-type-0.jpg") as sheet:
+        assert sheet.width == 1568
+
+
+def drifting(plan, **drift):
+    data = plan.model_dump()
+    for shot in data["shots"]:
+        shot["drift"] = {"x": 0, "y": 0, "zoom": 0, **drift}
+    return FilmDirection.model_validate(data)
+
+
+def test_negative_zoom_drift_can_make_footage_unreadable():
+    scenes = scaled()
+    plan = with_footage_state(x=0.15, y=0.15, w=0.7, h=0.7)
+    assert not any("readable" in i for i in director.validate_evidence(plan, scenes, 30))
+    shrinking = drifting(plan, zoom=-0.04)  # 0.70 -> 0.62 by the end of the 3s shot
+    issues = director.validate_evidence(shrinking, scenes, 30)
+    assert any("not readable" in i for i in issues)
+
+
+def test_drift_that_carries_the_click_off_canvas_is_rejected():
+    scenes = scaled(x=1800, y=540)
+    for scene in scenes:
+        scene["interactions"][0]["time"] = scene["start"] + 2.5  # drifted 0.1 right by then
+    plan = with_footage_state()
+    assert not any("click-0" in i for i in director.validate_evidence(plan, scenes, 30))
+    issues = director.validate_evidence(drifting(plan, x=0.04), scenes, 30)
+    assert any("click-0" in i and "frame" in i for i in issues)
+
+
+def test_drift_that_pushes_text_off_canvas_is_rejected():
+    data = film().model_dump()
+    data["shots"][0]["layers"].append(
+        dict(
+            id="t",
+            kind="text",
+            text="Ship",
+            states=[dict(beat=0, x=0.8, y=0.05, w=0.15, h=0.1)],
+        )
+    )
+    plan = FilmDirection.model_validate(data)
+    assert not any("safe margins" in i for i in director.validate_evidence(plan, sources(), 30))
+    issues = director.validate_evidence(drifting(plan, x=0.04), sources(), 30)
+    assert any("safe margins" in i for i in issues)
+
+
+@pytest.mark.parametrize(
+    "drift, beats, rejected",
+    [
+        ({"x": 0.04}, 6, False),  # 0.12 canvas units over 3s
+        ({"x": 0.05}, 6, True),  # 0.15
+        ({"y": -0.05}, 6, True),
+        ({"zoom": 0.04}, 6, False),  # 0.12
+        ({"zoom": 0.03}, 12, True),  # 0.18 over 6s
+    ],
+)
+def test_total_drift_is_bounded(drift, beats, rejected):
+    plan = drifting(film(), **drift)
+    plan.shots[0].beats = beats
+    plan.shots[0].layers[0].states[-1].beat = beats
+    issues = director.validate_evidence(plan, sources(), 30)
+    assert any("Shot 0" in i and "reduce drift" in i for i in issues) == rejected
+
+
+def test_type_crop_follows_the_drifted_text(tmp_path):
+    data = film().model_dump()
+    data["shots"][0]["drift"] = {"x": 0.04, "y": 0, "zoom": 0}
+    data["shots"][0]["layers"].append(
+        dict(id="t", kind="text", text="Ship", states=[dict(beat=0, x=0.1, y=0.1, w=0.2, h=0.1)])
+    )
+    plan = FilmDirection.model_validate(data)
+    frame = Image.new("RGB", (1920, 1080), "white")
+    # The renderer draws the text 0.12 canvas units right of its planned rectangle at 3s.
+    frame.paste((220, 20, 20), (round(0.22 * 1920), 108, round(0.42 * 1920), 216))
+    frame.save(tmp_path / "preview-0-89.jpg")
+    director.type_crops(tmp_path, plan, [{"index": 0, "frames": 90}])
+    with Image.open(tmp_path / "review-type-0.jpg") as sheet:
+        r, g, b = sheet.convert("RGB").getpixel((sheet.width // 2, sheet.height // 2))
+    assert r > 180 and g < 80
+
+
+def test_director_evidence_is_chunked_within_the_critic_image_size(tmp_path, monkeypatch):
+    scenes = []
+    for i in range(8):
+        Image.new("RGB", (3840, 2160), "white").save(tmp_path / f"scene-{i}.jpg")
+        details = []
+        for d in range(3):
+            Image.new("RGB", (1200, 800), "gray").save(tmp_path / f"detail-{i}-{d}.png")
+            details.append(f"detail-{i}-{d}.png")
+        scenes.append(
+            dict(
+                thumbnail=f"scene-{i}.jpg",
+                start=i * 3,
+                end=i * 3 + 3,
+                label=f"Feature {i}",
+                details=details,
+                interactions=[],
+            )
+        )
+    crops = []
+    for i in range(8):
+        for n in range(4):
+            Image.new("RGB", (1920, 1080), "red").save(tmp_path / f"click-{i}-{n}.jpg")
+            crops.append((f"click-{i}-{n}.jpg", f"click {i}/{n}"))
+    monkeypatch.setattr(director, "click_crops", lambda folder, scenes: crops)
+    seen = []
+
+    def reasoner(prompt, images, **kwargs):
+        seen.append(images)
+        raise director.ProviderError("stop after the first call")
+
+    with pytest.raises(director.ProviderError):
+        director.direct_film(
+            "App", "Brief", scenes, tmp_path, strategy="storyboard", reasoner=reasoner
+        )
+    (images,) = seen  # the treatment call receives the same chunked evidence
+    assert isinstance(images, list) and len(images) >= 4
+    sheets = sorted(tmp_path.glob("director-evidence-*.jpg"))
+    assert len(sheets) == len(images)
+    for path in sheets:
+        with Image.open(path) as sheet:
+            assert max(sheet.size) <= 1568

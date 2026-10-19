@@ -362,3 +362,310 @@ def test_failed_source_decode_cannot_reuse_a_stale_frame(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="source frames"):
         director.source_frames(tmp_path, sources())
     assert not (tmp_path / "source-0-start.jpg").exists()
+
+
+def claude_settings(name, default=""):
+    return {"ANTHROPIC_API_KEY": "sk-ant-secret", "CUTROOM_DIRECTOR": "claude"}.get(name, default)
+
+
+def test_claude_output_budget_exhaustion_is_retried_without_parsing_truncated_json(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "stop_reason": "max_tokens",
+                    "usage": {"output_tokens": 18000},
+                    "content": [{"type": "text", "text": '{"shots": [{"beat'}],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "usage": {"output_tokens": 9000},
+                "content": [{"type": "text", "text": '{"ready": true}'}],
+            },
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    telemetry = {}
+    assert providers.reason(
+        "Compose the film", motion=True, max_tokens=10000, telemetry=telemetry
+    ) == {"ready": True}
+    assert calls[0]["max_tokens"] == 18000
+    assert calls[1]["max_tokens"] == 32000
+    assert calls[0]["messages"] == calls[1]["messages"]
+    assert len(telemetry["usage_attempts"]) == 2
+
+
+def test_repeated_claude_truncation_stops_without_a_partial_plan(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "max_tokens",
+                "usage": {"output_tokens": kwargs["json"]["max_tokens"]},
+                "content": [{"type": "text", "text": "{"}],
+            },
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    telemetry = {}
+    with pytest.raises(providers.ProviderError, match="No partial film plan"):
+        providers.reason("Compose", motion=True, telemetry=telemetry)
+    assert len(calls) == 2
+    assert len(telemetry["usage_attempts"]) == 2
+
+
+def test_reasoning_errors_explain_the_provider_message_without_credentials(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    message = "This API key is not scoped to a workspace. Key sk-ant-secret rejected. " + "x" * 600
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kwargs: httpx.Response(
+            400,
+            json={"type": "error", "error": {"type": "invalid_request_error", "message": message}},
+        ),
+    )
+    with pytest.raises(providers.ProviderError) as raised:
+        providers.reason("Compose")
+    text = str(raised.value)
+    assert "Claude returned 400" in text
+    assert "not scoped to a workspace" in text
+    assert "sk-ant-secret" not in text
+    assert len(text) < 420
+
+
+def test_non_reasoning_provider_bodies_stay_private():
+    response = httpx.Response(400, json={"error": {"message": "echoed secret audio"}})
+    with pytest.raises(providers.ProviderError) as raised:
+        providers.checked(response, "OpenAI speech")
+    assert "echoed" not in str(raised.value)
+
+
+def test_claude_motion_defaults_to_opus(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append(kwargs["json"])
+        return httpx.Response(
+            200, json={"stop_reason": "end_turn", "content": [{"type": "text", "text": "{}"}]}
+        )
+
+    monkeypatch.setattr(providers.httpx, "post", post)
+    providers.reason("Compose", motion=True)
+    assert calls[0]["model"] == "claude-opus-5-5"
+    assert calls[0]["output_config"] == {"effort": "high"}
+
+
+def test_director_prompt_lists_named_clicks_and_zoom_caps(tmp_path, monkeypatch):
+    for name in ("scene-0.jpg", "scene-1.jpg"):
+        Image.new("RGB", (640, 360), "white").save(tmp_path / name)
+    scenes = sources()
+    for s in scenes:
+        s.update(viewport={"width": 1920, "height": 1080}, source_scale=2, still_scale=2)
+        s["interactions"][0].update(x=960, y=540, label="Board")
+    monkeypatch.setattr(director, "click_crops", lambda folder, scenes: [])
+    prompts = []
+
+    def reasoner(prompt, image, **kwargs):
+        prompts.append(prompt)
+        return film().model_dump()
+
+    director.direct_film("App", "Brief", scenes, tmp_path, strategy="baseline", reasoner=reasoner)
+    assert '"click-0"' in prompts[-1]
+    assert '"zoom_cap": {"footage": 2.0, "product": 2.0}' in prompts[-1]
+
+
+def test_v8_prompt_teaches_vocabulary_and_drops_enforced_prohibitions():
+    from server.video_prompts import MOTION_STUDIES, PROMPT_VERSION
+
+    assert PROMPT_VERSION == "motion-brief-v8"
+    assert "focus" in MOTION_STUDIES and "ring" in MOTION_STUDIES and "depth" in MOTION_STUDIES
+    assert "arbitrary assets, gradients" not in director.RULES
+    assert "Footage layers must remain visible throughout" not in director.RULES
+    assert "VOCABULARY." in director.RULES
+
+
+def test_click_crops_cut_a_native_box_around_each_recorded_click(tmp_path):
+    from server.video_render import ffmpeg
+
+    ffmpeg(
+        "-f", "lavfi", "-i", "color=c=red:s=1920x1080:r=30:d=1",
+        "-f", "lavfi", "-i", "color=c=blue:s=1920x1080:r=30:d=1",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map", "[v]", "-c:v", "libvpx", str(tmp_path / "raw.webm"),
+    )  # fmt: skip
+    scenes = sources()[:1]
+    scenes[0]["end"] = 2
+    scenes[0]["source_scale"] = 1
+    scenes[0]["interactions"] = [
+        dict(kind="click", time=1.5, x=100, y=100, label="Board"),
+        dict(kind="click", time=1.6),
+    ]
+    crops = director.click_crops(tmp_path, scenes)
+    assert crops == [("click-0-0.jpg", "scene-0.jpg / click-0 (Board)")]
+    with Image.open(tmp_path / "click-0-0.jpg") as crop:
+        assert crop.size == (960, 540)
+        r, g, b = crop.convert("RGB").getpixel((10, 10))
+        assert b > 200 and r < 60
+    assert director.click_crops(tmp_path, scenes) == crops
+    assert director.click_crops(tmp_path / "missing", scenes) == []
+
+
+def test_reasoner_sends_every_image_in_order(monkeypatch):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kw: (
+            calls.append(kw["json"]),
+            httpx.Response(
+                200, json={"stop_reason": "end_turn", "content": [{"type": "text", "text": "{}"}]}
+            ),
+        )[1],
+    )
+    providers.reason("Review", ["AAA", "BBB"], motion=True)
+    images = [
+        b["source"]["data"] for b in calls[0]["messages"][0]["content"] if b["type"] == "image"
+    ]
+    assert images == ["AAA", "BBB"]
+
+
+def test_reasoner_openai_sends_every_image_in_order(monkeypatch):
+    def openai_settings(name, default=""):
+        return {"OPENAI_API_KEY": "sk-test-key"}.get(name, default)
+
+    monkeypatch.setattr(providers, "setting", openai_settings)
+    calls = []
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kw: (
+            calls.append(kw["json"]),
+            httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "usage": {"output_tokens": 100},
+                    "output": [{"content": [{"type": "output_text", "text": "{}"}]}],
+                },
+            ),
+        )[1],
+    )
+    providers.reason("Review", ["AAA", "BBB"], motion=True)
+    images = [b["image_url"] for b in calls[0]["input"][0]["content"] if b["type"] == "input_image"]
+    assert images == ["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBB"]
+
+
+@pytest.mark.parametrize("screenshot", ["", ["", "AAA", None, ""]])
+def test_reasoner_skips_empty_images(monkeypatch, screenshot):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    calls = []
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kw: (
+            calls.append(kw["json"]),
+            httpx.Response(
+                200, json={"stop_reason": "end_turn", "content": [{"type": "text", "text": "{}"}]}
+            ),
+        )[1],
+    )
+    providers.reason("Review", screenshot)
+    images = [
+        b["source"]["data"] for b in calls[0]["messages"][0]["content"] if b["type"] == "image"
+    ]
+    assert images == ([] if screenshot == "" else ["AAA"])
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        lambda cmd, **kw: (_ for _ in ()).throw(director.subprocess.TimeoutExpired(cmd, 20)),
+        lambda cmd, **kw: (_ for _ in ()).throw(OSError("no ffmpeg")),
+        lambda cmd, **kw: director.subprocess.CompletedProcess(cmd, 1, b"", b"past the end"),
+    ],
+)
+def test_click_crop_failures_skip_the_crop_instead_of_aborting(tmp_path, monkeypatch, failure):
+    (tmp_path / "raw.webm").write_bytes(b"not a real video")
+    scenes = sources()[:1]
+    scenes[0]["interactions"] = [
+        dict(kind="click", time=9.0, x=100, y=100, label="Late"),
+        dict(kind="click", time=1.0, x=None, y=50),
+        dict(kind="click", time=1.0, x=50, y=None),
+    ]
+    calls = []
+    monkeypatch.setattr(
+        director.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or failure(cmd, **kw)
+    )
+    assert director.click_crops(tmp_path, scenes) == []
+    assert len(calls) == 1  # coordinate-less clicks never reach ffmpeg
+
+
+def test_click_crops_are_capped_per_scene(tmp_path):
+    from server.video_render import ffmpeg
+
+    ffmpeg(
+        "-f", "lavfi", "-i", "color=c=blue:s=1920x1080:r=30:d=2",
+        "-c:v", "libvpx", str(tmp_path / "raw.webm"),
+    )  # fmt: skip
+    scenes = sources()[:1]
+    scenes[0]["end"] = 2
+    scenes[0]["source_scale"] = 1
+    scenes[0]["interactions"] = [
+        dict(kind="click", time=0.2 * n, x=100 + n, y=100, label=f"c{n}") for n in range(6)
+    ]
+    crops = director.click_crops(tmp_path, scenes)
+    assert [name for name, _ in crops] == [f"click-0-{n}.jpg" for n in range(4)]
+
+
+def claude_reply(monkeypatch, text):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kwargs: httpx.Response(
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "usage": {},
+                "content": [{"type": "text", "text": text}],
+            },
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('{"ready": true}', {"ready": True}),
+        ('```json\n{"ready": true}\n```', {"ready": True}),
+        ('{"ready": true}\nLet me know if you want changes.', {"ready": True}),
+        ('Here you go:\n```json\n{"ready": true}\n```\nDone.', {"ready": True}),
+        ('{"n": 1}\n{"n": 2}', {"n": 1}),
+        ('{"a": {"b": "}"}} trailing {', {"a": {"b": "}"}}),
+    ],
+)
+def test_reasoner_reads_the_first_json_object(monkeypatch, text, expected):
+    claude_reply(monkeypatch, text)
+    assert providers.reason("Compose") == expected
+
+
+@pytest.mark.parametrize("text", ["No plan today.", '{"shots": [', "[1, 2]"])
+def test_reasoner_rejects_replies_without_a_complete_object(monkeypatch, text):
+    claude_reply(monkeypatch, text)
+    with pytest.raises(ValueError, match="invalid scene plan"):
+        providers.reason("Compose")

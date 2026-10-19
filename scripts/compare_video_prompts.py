@@ -11,6 +11,7 @@ import shutil
 import time
 from pathlib import Path
 
+from server.video_capture import measure_sources
 from server.video_direction import compile_direction, direct_film, review_film
 from server.video_direction_models import FilmTreatment
 from server.video_models import TimelineClip
@@ -34,6 +35,7 @@ def copy_capture(source: Path, output: Path) -> list[dict]:
         if not re.fullmatch(r"raw\.webm|scene-\d{1,2}\.jpg|detail-\d{1,2}-\d\.png", name):
             raise ValueError("Invalid capture asset")
         shutil.copyfile(source / name, output / name)
+    measure_sources(output, scenes)
     (output / "source-scenes.json").write_text(json.dumps(scenes, indent=2))
     return scenes
 
@@ -172,6 +174,8 @@ def main():
             def request(*a, provider=provider, model=model, calls=calls, folder=folder, **kw):
                 telemetry = {}
                 call_effort = kw.pop("effort", args.effort)
+                # review_film passes its own telemetry dict to record usage per pass.
+                caller_telemetry = kw.pop("telemetry", None)
                 try:
                     return reason(
                         *a,
@@ -182,6 +186,8 @@ def main():
                         telemetry=telemetry,
                     )
                 finally:
+                    if caller_telemetry is not None:
+                        caller_telemetry.update(telemetry)
                     calls.append(telemetry)
                     (folder / "usage.json").write_text(json.dumps(calls, indent=2))
 

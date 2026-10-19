@@ -116,7 +116,7 @@ try {
       logLevel: 'error',
     });
     if (manifest.preview) {
-      const frames = [
+      const frames = job.preview_frames ?? [
         ...new Set([
           0,
           ...[0.2, 0.5, 0.8].map((t) => Math.round((job.frames - 1) * t)),
@@ -131,7 +131,7 @@ try {
           output: join(folder, `preview-${job.index}-${frame}.jpg`),
           frame,
           imageFormat: 'jpeg',
-          scale: 0.5,
+          scale: 1,
           puppeteerInstance: browser,
           logLevel: 'error',
         });

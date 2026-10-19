@@ -19,7 +19,7 @@ export async function createDirectedCapture(page, directory) {
     if (!active || failure) return;
     const buffer = Buffer.from(event.data, 'base64');
     bytes += buffer.length;
-    if (++count > 12000 || bytes > 350 * 1024 * 1024) {
+    if (++count > 12000 || bytes > 1200 * 1024 * 1024) {
       failure = new Error(
         'The directed recording exceeded its capture budget. Try fewer features.',
       );
@@ -44,9 +44,9 @@ export async function createDirectedCapture(page, directory) {
       });
       await session.send('Page.startScreencast', {
         format: 'jpeg',
-        quality: 90,
-        maxWidth: 1920,
-        maxHeight: 1080,
+        quality: 85,
+        maxWidth: 3840,
+        maxHeight: 2160,
         everyNthFrame: 1,
       });
       let timer;

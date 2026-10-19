@@ -1,6 +1,6 @@
 """Versioned production briefs. Strategies vary planning, never mandate a shot sequence."""
 
-PROMPT_VERSION = "motion-brief-v7"
+PROMPT_VERSION = "motion-brief-v8"
 STRATEGIES = ("baseline", "detailed", "storyboard", "studies")
 
 CRAFT = """
@@ -70,7 +70,7 @@ Return JSON with exactly these keys:
  "palette": ["#hex values grounded in the product"],
  "typography": "hierarchy, alignment, copy length and entrances",
  "rhythm": "pace contrast, holds, chosen BPM and accents",
- "shots": [{"source":"scene-N.jpg", "purpose":"what this shot communicates", "eye_path":"entry focal point -> action -> resting point", "transition":"explicit relationship to next shot", "seconds":3}],
+ "shots": [{"source":"scene-N.jpg", "purpose":"what this shot communicates", "eye_path":"entry focal point -> action -> resting point", "camera":"framing per beat, e.g. full → push to click-1 at 1.8x → settle 1.2x", "depth":"what sits in front/behind", "transition":"explicit relationship to next shot", "seconds":3}],
  "avoid": ["specific risks in this product/reference"],
  "reference_translation": "observed reference techniques and how they change for this product"
 }
@@ -102,21 +102,18 @@ MOTION_STUDIES = """
 These are small technical studies, NOT a film sequence or templates to copy. Invent an
 execution at least this intentional, using this product's actual evidence and your chosen motif.
 
-A. Detail becomes a world. A detail layer begins at x=.12,y=.22,w=.3,h=.3,radius=80.
-At beat .4 repeat that geometry (anticipation). At beat 1.2 it occupies x=0,y=0,w=1,h=1,
-radius=0 with spring easing. Hold to beat 2.4. The next shot can cut to fullscreen proof.
-Use a real detail large enough to recognize, not another miniature copy of the entire screen.
+A. Push into the proof. Footage starts full-frame (cam_zoom 1). From beat 1.5 to 2.3 it springs to
+cam_zoom 1.8 with focus:"click-N" just before that click happens. A ring with target_layer set to the
+footage and target:"click-N" fades in as the camera settles, then the camera eases back to 1.2 so
+the result reads. The click never leaves the frame.
 
-B. Type has physical presence. On a solid brand-derived field, a 2–4 word line occupies
-x=.06,y=.2,w=.86,h=.5 at 180–220px. It enters with words or mask, settles within .4 seconds,
-and remains legible for 1 second. A thin accent shape tracks the text baseline and expands
-laterally in .2 seconds to lead the outgoing eye. Choose product-specific copy. An intentional
-type-only shot can have more character than adding three unrelated screenshots around a caption.
+B. A rail carries the eye. A segments shape (count 10, gap .45) in the accent color sits on a
+baseline. It extends laterally over .3 seconds as type lands. Its final geometry equals the first
+state of a matching rail in the next shot (entry:"match"), so the cut feels continuous.
 
-C. A control hands off attention. A real detail at x=.08,y=.25,w=.38,h=.4 moves to
-x=.56,y=.25,w=.38,h=.4 over .35 seconds. Only AFTER arrival, type enters the vacated left half.
-Hold both for .8–1.2 seconds, then a decisive cut changes scale. Do not park this split for four
-seconds or decorate it with an unnecessary second screenshot. Use one dominant object.
+C. Parallax hold. A product still sits at depth .4 with elevation .6 over a radial backdrop; a 2-4
+word line sits at depth 1. Shot drift {x:-0.01, zoom:0.015} moves the line more than the product
+while it is read. Do not add drift to a shot that is already moving.
 
 Translate seconds into the chosen BPM. Adapt geometry to source aspect ratios and safe text margins.
 Avoid making all three examples into consecutive scenes. You can reject them all if your concept

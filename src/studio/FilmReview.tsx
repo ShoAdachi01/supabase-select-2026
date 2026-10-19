@@ -1,5 +1,9 @@
 import { AXES, type FilmReviewReport, type ReviewFinding } from './types';
 
+// Mirror AXIS_FLOOR and MEAN_BAR in server/video_direction_models.py.
+const AXIS_FLOOR = 7;
+const MEAN_BAR = 7.5;
+
 const LABELS: Record<(typeof AXES)[number], string> = {
   readability: 'Readability',
   canvas: 'Canvas',
@@ -22,10 +26,19 @@ export function FilmReview({ report }: { report: FilmReviewReport }) {
   const findings: ReviewFinding[] = review
     ? [...(review.blocking ?? []), ...AXES.flatMap((axis) => review[axis]?.findings ?? [])]
     : [];
+  const values = scores
+    ? AXES.map((axis) => scores[axis]).filter((s): s is number => typeof s === 'number')
+    : [];
+  const mean = values.length ? values.reduce((sum, s) => sum + s, 0) / values.length : undefined;
   return (
     <section className={`film-review ${report.status}`} aria-label="Film review">
       <header>
         <strong>{STATUS[report.status] ?? STATUS.unavailable}</strong>
+        {mean !== undefined && (
+          <small className={mean >= MEAN_BAR ? 'ok' : 'low'}>
+            Mean {mean.toFixed(1)} / bar {MEAN_BAR}
+          </small>
+        )}
         <small>
           {report.revision_count} revision{report.revision_count === 1 ? '' : 's'}
         </small>
@@ -35,10 +48,13 @@ export function FilmReview({ report }: { report: FilmReviewReport }) {
           {AXES.map((axis) => {
             const score: number | undefined = scores[axis];
             return (
-              <li key={axis} className={typeof score === 'number' && score >= 8 ? 'ok' : 'low'}>
+              <li
+                key={axis}
+                className={typeof score === 'number' && score >= AXIS_FLOOR ? 'ok' : 'low'}
+              >
                 <span>{LABELS[axis]}</span>
                 {typeof score === 'number' && (
-                  <meter min={1} max={10} low={7.9} optimum={10} value={score} />
+                  <meter min={1} max={10} low={AXIS_FLOOR - 0.1} optimum={10} value={score} />
                 )}
                 <b>{score ?? '–'}</b>
               </li>

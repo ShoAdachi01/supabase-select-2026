@@ -630,3 +630,42 @@ def test_click_crops_are_capped_per_scene(tmp_path):
     ]
     crops = director.click_crops(tmp_path, scenes)
     assert [name for name, _ in crops] == [f"click-0-{n}.jpg" for n in range(4)]
+
+
+def claude_reply(monkeypatch, text):
+    monkeypatch.setattr(providers, "setting", claude_settings)
+    monkeypatch.setattr(
+        providers.httpx,
+        "post",
+        lambda url, **kwargs: httpx.Response(
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "usage": {},
+                "content": [{"type": "text", "text": text}],
+            },
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('{"ready": true}', {"ready": True}),
+        ('```json\n{"ready": true}\n```', {"ready": True}),
+        ('{"ready": true}\nLet me know if you want changes.', {"ready": True}),
+        ('Here you go:\n```json\n{"ready": true}\n```\nDone.', {"ready": True}),
+        ('{"n": 1}\n{"n": 2}', {"n": 1}),
+        ('{"a": {"b": "}"}} trailing {', {"a": {"b": "}"}}),
+    ],
+)
+def test_reasoner_reads_the_first_json_object(monkeypatch, text, expected):
+    claude_reply(monkeypatch, text)
+    assert providers.reason("Compose") == expected
+
+
+@pytest.mark.parametrize("text", ["No plan today.", '{"shots": [', "[1, 2]"])
+def test_reasoner_rejects_replies_without_a_complete_object(monkeypatch, text):
+    claude_reply(monkeypatch, text)
+    with pytest.raises(ValueError, match="invalid scene plan"):
+        providers.reason("Compose")

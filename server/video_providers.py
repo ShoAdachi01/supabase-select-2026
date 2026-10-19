@@ -253,10 +253,17 @@ def reason(
             usage=response.json().get("usage", {}),
             usage_attempts=budget_attempts,
         )
-    result = result.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    value = json.loads(result)
+    invalid = ValueError("The director returned an invalid scene plan. Try a more specific brief.")
+    # Models sometimes wrap the object in prose or fences, or add text after it.
+    start = result.find("{")
+    if start < 0:
+        raise invalid
+    try:
+        value, _ = json.JSONDecoder().raw_decode(result, start)
+    except json.JSONDecodeError:
+        raise invalid from None
     if not isinstance(value, dict):
-        raise ValueError("The director returned an invalid scene plan. Try a more specific brief.")
+        raise invalid
     return value
 
 

@@ -101,6 +101,9 @@ def print_table(results: dict) -> None:
     header = ["film", *AXES, "valid runs"]
     rows = [header]
     for film, result in results.items():
+        if "error" in result:
+            rows.append([film, *(["n/a"] * len(AXES)), f"0/0 ({result['error']})"])
+            continue
         rows.append(
             [
                 Path(film).parent.name + "/" + Path(film).name,
@@ -128,10 +131,18 @@ def main():
     results = {}
     with tempfile.TemporaryDirectory() as scratch:
         for index, film in enumerate(args.films):
-            sheets = film_sheets(film, index, Path(scratch) / f"film-{index}")
-            runs = [score_run(prompt, sheets, args.provider, args.model) for _ in range(args.runs)]
-            results[str(film)] = summarize(runs)
-    (args.out / "scores.json").write_text(json.dumps(results, indent=2))
+            try:
+                sheets = film_sheets(film, index, Path(scratch) / f"film-{index}")
+            except Exception as error:  # one unreadable film must not discard the others
+                message = f"{type(error).__name__}: {str(error)[:300]}"
+                results[str(film)] = {"error": message, "valid_runs": 0, "runs": []}
+            else:
+                runs = [
+                    score_run(prompt, sheets, args.provider, args.model) for _ in range(args.runs)
+                ]
+                results[str(film)] = summarize(runs)
+            # Written after every film so a crash keeps the results already paid for.
+            (args.out / "scores.json").write_text(json.dumps(results, indent=2))
     print_table(results)
 
 

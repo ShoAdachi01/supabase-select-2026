@@ -78,3 +78,27 @@ def test_aggregation_skips_invalid_run(film, tmp_path, monkeypatch, capsys):
     assert data[str(film)]["summary"]["canvas"]["stdev"] == pytest.approx(statistics.stdev([6, 8]))
     assert data[str(film)]["valid_runs"] == 2
     assert "7.00 ± 1.41" in capsys.readouterr().out
+
+
+def test_missing_film_is_recorded_and_next_film_scored(film, tmp_path, monkeypatch, capsys):
+    out = tmp_path / "out"
+    seen = []
+
+    def fake_reason(prompt, sheets, **kwargs):
+        seen.append(len(sheets))
+        # scores.json already holds the failed first film while the second is being scored
+        assert json.loads((out / "scores.json").read_text())[str(missing)]["valid_runs"] == 0
+        return review(8)
+
+    missing = tmp_path / "nope.mp4"
+    monkeypatch.setattr(score_films, "reason", fake_reason)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["score_films", "--films", str(missing), str(film), "--runs", "2", "--out", str(out)],
+    )
+    score_films.main()
+    data = json.loads((out / "scores.json").read_text())
+    assert data[str(missing)]["error"] and data[str(missing)]["runs"] == []
+    assert data[str(film)]["valid_runs"] == 2
+    assert len(seen) == 2
+    assert "nope.mp4" in capsys.readouterr().out

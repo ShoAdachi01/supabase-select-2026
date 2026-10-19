@@ -3446,6 +3446,9 @@ svg {
 .film-review > header small {
   color: var(--muted);
 }
+.film-review > header small.low {
+  color: var(--coral);
+}
 .film-review-scores {
   list-style: none;
   margin: 0;

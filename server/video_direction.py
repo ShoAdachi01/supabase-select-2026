@@ -938,8 +938,7 @@ def regressed(before: FilmReview, after: FilmReview) -> list[str]:
 
 
 CRITIC = f"""Score these actual rendered frames of a product launch film on seven axes, 1-10.
-Anchors (5 = acceptable draft, 8 = professional launch quality).
-A film passes with every axis >= {AXIS_FLOOR} and a mean >= {MEAN_BAR}; a professional launch film scores about 7-9 per axis.
+Anchors (5 = acceptable draft, 8 = professional launch quality):
 - readability: 5 = key UI legible only on pause; 8 = the clicked control and its result read at 1080p.
 - canvas: 5 = large unused areas or thin bands; 8 = the dominant object fills its frame by intent.
 - motion: 5 = moves happen but do not lead the eye; 8 = every move guides attention to a real detail.

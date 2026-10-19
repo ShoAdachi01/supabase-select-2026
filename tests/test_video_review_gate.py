@@ -1,6 +1,8 @@
 """The critic gate needs evidence for every score and never invents criticism of strong work."""
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -8,7 +10,7 @@ from pydantic import ValidationError
 
 from server import video_composition
 from server import video_direction as director
-from server.video_direction_models import AXES, FilmReview
+from server.video_direction_models import AXES, AXIS_FLOOR, MEAN_BAR, FilmReview
 from tests.test_video_direction import film, sources
 
 
@@ -397,7 +399,7 @@ def scored(**scores):
     """A review whose axes below the floor carry an actionable finding."""
     data = review(**scores)
     for a, s in scores.items():
-        data[a] = axis(s, FIX if s < 7 else None)
+        data[a] = axis(s, FIX if s < AXIS_FLOOR else None)
     return data
 
 
@@ -439,8 +441,9 @@ def test_blocking_finding_fails_the_professional_control_too():
     assert director.gate(FilmReview.model_validate(notion)) == "needs_review"
 
 
-def test_critic_prompt_has_checkable_typography_criteria_and_states_the_bar():
+def test_critic_prompt_has_typography_criteria_but_not_the_pass_bar():
     for phrase in (
+        "(5 = acceptable draft, 8 = professional launch quality)",
         "low size contrast between headline and support",
         "centered by default",
         "widows",
@@ -449,9 +452,19 @@ def test_critic_prompt_has_checkable_typography_criteria_and_states_the_bar():
         "alignment tied to a product edge or grid",
         "no orphans or clipping",
         "type entrances timed to the beat",
-        "every axis >= 7 and a mean >= 7.5",
-        "For any axis below 7 give actionable findings",
+        f"For any axis below {AXIS_FLOOR} give actionable findings",
         "Do not invent\ncriticism of strong work",
         "- canvas: 5 = large unused areas or thin bands; 8 = the dominant object fills its frame by intent.",
     ):
         assert phrase in director.CRITIC
+    # The gate alone applies the bar; telling the scorer would anchor its scores to it.
+    for leak in (str(MEAN_BAR), "passes with", "a mean", "7-9"):
+        assert leak not in director.CRITIC
+
+
+def test_studio_bar_constants_mirror_the_server():
+    source = (Path(__file__).parents[1] / "src/studio/FilmReview.tsx").read_text()
+    floor = re.search(r"const AXIS_FLOOR = ([\d.]+);", source)
+    bar = re.search(r"const MEAN_BAR = ([\d.]+);", source)
+    assert floor and float(floor[1]) == AXIS_FLOOR
+    assert bar and float(bar[1]) == MEAN_BAR

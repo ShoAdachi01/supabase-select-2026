@@ -1258,10 +1258,12 @@ export default function Studio() {
                         ))}
                       </select>
                     </label>
-                    <button className="text-button" onClick={() => previewVoice(voice)}>
-                      <Play size={11} />
-                      Hear this voice
-                    </button>
+                    {voice !== 'none' && (
+                      <button className="text-button" onClick={() => previewVoice(voice)}>
+                        <Play size={11} />
+                        Hear this voice
+                      </button>
+                    )}
                     <label>
                       Background music
                       <select
@@ -1510,18 +1512,20 @@ export default function Studio() {
                   </span>
                   <h3>{v.name}</h3>
                   <p>{v.description}</p>
-                  <button
-                    className="voice-preview"
-                    disabled={previewing === v.id}
-                    onClick={() => previewVoice(v.id)}
-                  >
-                    {previewing === v.id ? (
-                      <LoaderCircle size={13} className="spin" />
-                    ) : (
-                      <Play size={11} fill="currentColor" />
-                    )}
-                    Listen to a sample
-                  </button>
+                  {v.id !== 'none' && (
+                    <button
+                      className="voice-preview"
+                      disabled={previewing === v.id}
+                      onClick={() => previewVoice(v.id)}
+                    >
+                      {previewing === v.id ? (
+                        <LoaderCircle size={13} className="spin" />
+                      ) : (
+                        <Play size={11} fill="currentColor" />
+                      )}
+                      Listen to a sample
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

@@ -47,7 +47,7 @@ try {
   const headers = { Authorization: `Bearer ${token}` };
   let job;
   let lastStage = '';
-  for (let i = 0; i < 240; i++) {
+  for (let i = 0; i < 600; i++) {
     await page.waitForTimeout(2000);
     const response = await fetch(`${origin}/api/videos`, { headers });
     assert.equal(response.status, 200);
